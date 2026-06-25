@@ -42,14 +42,21 @@ function readLines(filePath: string): string[] {
 
 function ghJson<T>(args: string[]): T | null {
     try {
-        const result = cp.execSync(`gh ${args.join(' ')}`, {
+        const result = cp.execSync(`/usr/bin/gh ${args.join(' ')}`, {
             encoding: 'utf8',
-            env: { ...process.env, GH_TOKEN: process.env.GITHUB_TOKEN ?? '' },
+            env: {
+                ...process.env,
+                GH_TOKEN:     process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN ?? '',
+                PATH:         process.env.PATH ?? '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
+            },
             timeout: 5000,
             stdio: ['ignore', 'pipe', 'ignore'],
         });
         return JSON.parse(result) as T;
-    } catch { return null; }
+    } catch (e) {
+        out.appendLine(`gh failed (${args[0]}): ${e}`);
+        return null;
+    }
 }
 
 function getCurrentBranch(workspacePath: string): string | null {
@@ -156,11 +163,12 @@ function discoverTasks(): Task[] {
 
     const latestLog = new Map<string, string>();
     for (const file of logFiles.sort()) {
-        const t = file.match(/^issue-(\d+)-\d+\.log$/);
+        // filenames: issue-{N}-{YYYYMMDD}-{HHMMSS}.log  (two dash-separated digit groups)
+        const t = file.match(/^issue-(\d+)-[\d-]+\.log$/);
         if (t) { latestLog.set(`task-${t[1]}`, file); continue; }
-        const r = file.match(/^resume-issue-(\d+)-\d+\.log$/);
+        const r = file.match(/^resume-issue-(\d+)-[\d-]+\.log$/);
         if (r) { latestLog.set(`resume-${r[1]}`, file); continue; }
-        const c = file.match(/^ci-fix-pr(\d+)-\d+\.log$/);
+        const c = file.match(/^ci-fix-pr(\d+)-[\d-]+\.log$/);
         if (c) { latestLog.set(`ci-fix-${c[1]}`, file); }
     }
 
