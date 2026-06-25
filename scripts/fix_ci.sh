@@ -13,14 +13,32 @@ LOCKFILE="$LOCK_DIR/issue-${ISSUE_NUMBER}.lock"
 
 log() { echo "$*" | tee -a "$LOGFILE"; }
 
+save_state() {
+    TASK_ISSUE_NUMBER="${ISSUE_NUMBER:-0}" \
+    TASK_TYPE="ci-fix" \
+    TASK_STATUS="${1}" \
+    TASK_TITLE="${ISSUE_TITLE:-PR #${PR_NUMBER}}" \
+    TASK_REPO="${REPO_NAME_WITH_OWNER:-}" \
+    TASK_PR_BRANCH="${PR_BRANCH:-}" \
+    TASK_WORKSPACE="${WORKSPACE:-}" \
+    TASK_LOG="$LOGFILE" \
+    TASK_PID="${2:-}" \
+    TASK_PR_NUMBER="${PR_NUMBER:-}" \
+    TASK_PR_URL="https://github.com/${REPO_NAME_WITH_OWNER}/pull/${PR_NUMBER}" \
+    TASK_FAILED_RUN_ID="${FAILED_RUN_ID:-}" \
+    python3 /app/scripts/update_state.py 2>/dev/null || true
+}
+
 echo $$ > "$LOCKFILE"
-trap "rm -f '$LOCKFILE'" EXIT
+trap "save_state failed; rm -f '$LOCKFILE'" EXIT
 
 log "=== CI fix for PR #${PR_NUMBER} (issue #${ISSUE_NUMBER}) — run ${FAILED_RUN_ID} ==="
 log "=== Repo: ${REPO_NAME_WITH_OWNER} | Branch: ${PR_BRANCH} ==="
 
 REPO_NAME="${REPO_NAME_WITH_OWNER##*/}"
 WORKSPACE="/workspaces/${REPO_NAME}-${ISSUE_NUMBER}"
+
+save_state running $$
 
 # ── Workspace — reuse existing or clone ──────────────────────────────────────
 if [[ -d "$WORKSPACE/.git" ]]; then
@@ -106,3 +124,6 @@ git push origin "$PR_BRANCH" 2>&1 | tee -a "$LOGFILE"
 
 log "=== Pushed. CI will rerun on PR #${PR_NUMBER}. ==="
 log "=== Poller will pick up any remaining failures on the next cycle. ==="
+
+save_state completed
+trap "rm -f '$LOCKFILE'" EXIT

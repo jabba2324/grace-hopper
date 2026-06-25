@@ -8,10 +8,14 @@ import json
 import logging
 import os
 import subprocess
+import sys
 import time
 from pathlib import Path
 
 import requests
+
+sys.path.insert(0, "/app/scripts")
+import state as task_state
 
 logging.basicConfig(
     level=logging.INFO,
@@ -207,6 +211,15 @@ def dispatch_task(item: dict, project_id: str, status_field_id: str, in_progress
 
     log.info("Dispatching issue #%s from %s: %s", issue_number, repo_nwo, issue_title)
 
+    task_state.upsert({
+        "issueNumber": issue_number,
+        "type":        "task",
+        "status":      "dispatched",
+        "title":       issue_title,
+        "repo":        repo_nwo,
+        "issueUrl":    f"https://github.com/{repo_nwo}/issues/{issue_number}",
+    })
+
     gql(UPDATE_STATUS, {
         "projectId": project_id,
         "itemId":    item["id"],
@@ -310,6 +323,18 @@ def dispatch_ci_fix(repo_nwo: str, issue_number: int, issue_title: str,
                     failed_run_id: str) -> None:
     log.info("Dispatching CI fix for PR #%s (issue #%s, run %s)",
              pr_number, issue_number, failed_run_id)
+
+    task_state.upsert({
+        "issueNumber":  issue_number,
+        "type":         "ci-fix",
+        "status":       "dispatched",
+        "title":        f"CI fix — PR #{pr_number}",
+        "repo":         repo_nwo,
+        "prNumber":     pr_number,
+        "prUrl":        f"https://github.com/{repo_nwo}/pull/{pr_number}",
+        "failedRunId":  failed_run_id,
+    })
+
     subprocess.Popen(
         ["/app/scripts/fix_ci.sh"],
         env={

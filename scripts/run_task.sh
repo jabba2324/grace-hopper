@@ -13,8 +13,23 @@ LOCKFILE="$LOCK_DIR/issue-${ISSUE_NUMBER}.lock"
 
 log() { echo "$*" | tee -a "$LOGFILE"; }
 
+save_state() {
+    TASK_ISSUE_NUMBER="$ISSUE_NUMBER" \
+    TASK_TYPE="task" \
+    TASK_STATUS="${1}" \
+    TASK_TITLE="$ISSUE_TITLE" \
+    TASK_REPO="$REPO_NAME_WITH_OWNER" \
+    TASK_WORKSPACE="${WORKSPACE:-}" \
+    TASK_BRANCH="${BRANCH:-}" \
+    TASK_LOG="$LOGFILE" \
+    TASK_PID="${2:-}" \
+    TASK_PR_URL="${PR_URL:-}" \
+    TASK_PR_NUMBER="${PR_NUMBER:-}" \
+    python3 /app/scripts/update_state.py 2>/dev/null || true
+}
+
 echo $$ > "$LOCKFILE"
-trap "rm -f '$LOCKFILE'" EXIT
+trap "save_state failed; rm -f '$LOCKFILE'" EXIT
 
 log "=== Starting task for issue #${ISSUE_NUMBER}: ${ISSUE_TITLE} ==="
 log "=== Repo: ${REPO_NAME_WITH_OWNER} ==="
@@ -23,6 +38,10 @@ REPO_NAME="${REPO_NAME_WITH_OWNER##*/}"
 BRANCH_SLUG="$(echo "$ISSUE_TITLE" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/--*/-/g' | cut -c1-40 | sed 's/-$//')"
 BRANCH="issue/${ISSUE_NUMBER}/${BRANCH_SLUG}"
 WORKSPACE="/workspaces/${REPO_NAME}-${ISSUE_NUMBER}"
+PR_URL=""
+PR_NUMBER=""
+
+save_state running $$
 
 # ── Clone ────────────────────────────────────────────────────────────────────
 if [[ -d "$WORKSPACE/.git" ]]; then
@@ -72,10 +91,7 @@ Do NOT create a pull request — the system will handle that automatically after
 Do not ask for confirmation — work autonomously to completion.
 GOAL
 
-# ── Sanity-check Claude is reachable ─────────────────────────────────────────
 log "=== Claude version: $(claude --version 2>&1) ==="
-
-# ── Run Claude Code ───────────────────────────────────────────────────────────
 log "=== Running Claude Code ==="
 
 export CLAUDE_PROMPT
@@ -106,8 +122,10 @@ PR_URL="$(gh pr create \
     --body "Closes #${ISSUE_NUMBER}" \
     --base "$DEFAULT_BRANCH" \
     --head "$BRANCH" 2>&1 | tee -a "$LOGFILE" | tail -1)"
+PR_NUMBER="${PR_URL##*/}"
 
 log "=== PR created: ${PR_URL} ==="
+save_state running $$
 
 # ── Comment on issue ─────────────────────────────────────────────────────────
 gh issue comment "$ISSUE_NUMBER" \
@@ -116,7 +134,7 @@ gh issue comment "$ISSUE_NUMBER" \
 
 log "=== Commented on issue #${ISSUE_NUMBER} ==="
 
-# ── Move ticket to In Review (best-effort) ────────────────────────────────────
+# ── Move ticket to In Review ──────────────────────────────────────────────────
 if [[ -n "${STATUS_FIELD_ID:-}" && -n "${ITEM_ID:-}" && -n "${PROJECT_ID:-}" ]]; then
     IN_REVIEW_OPTION_ID="$(
         gh api graphql \
@@ -131,7 +149,9 @@ if [[ -n "${STATUS_FIELD_ID:-}" && -n "${ITEM_ID:-}" && -n "${PROJECT_ID:-}" ]];
           -f p="$PROJECT_ID" -f i="$ITEM_ID" -f f="$STATUS_FIELD_ID" -f v="$IN_REVIEW_OPTION_ID" \
           > /dev/null 2>&1 || true
         log "=== Moved issue #${ISSUE_NUMBER} to In Review ==="
-    else
-        log "=== WARNING: 'In Review' status not found in project board — ticket left as-is ==="
     fi
 fi
+
+save_state completed
+trap "rm -f '$LOCKFILE'" EXIT   # override: clean exit, don't mark failed
+log "=== Task complete ==="

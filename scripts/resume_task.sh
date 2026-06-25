@@ -13,14 +13,34 @@ LOCKFILE="$LOCK_DIR/issue-${ISSUE_NUMBER}.lock"
 
 log() { echo "$*" | tee -a "$LOGFILE"; }
 
+PR_URL=""
+PR_NUMBER=""
+
+save_state() {
+    TASK_ISSUE_NUMBER="$ISSUE_NUMBER" \
+    TASK_TYPE="resume" \
+    TASK_STATUS="${1}" \
+    TASK_TITLE="$ISSUE_TITLE" \
+    TASK_REPO="$REPO_NAME_WITH_OWNER" \
+    TASK_PR_BRANCH="${PR_BRANCH:-}" \
+    TASK_WORKSPACE="${WORKSPACE:-}" \
+    TASK_LOG="$LOGFILE" \
+    TASK_PID="${2:-}" \
+    TASK_PR_URL="${PR_URL:-}" \
+    TASK_PR_NUMBER="${PR_NUMBER:-}" \
+    python3 /app/scripts/update_state.py 2>/dev/null || true
+}
+
 echo $$ > "$LOCKFILE"
-trap "rm -f '$LOCKFILE'" EXIT
+trap "save_state failed; rm -f '$LOCKFILE'" EXIT
 
 log "=== Resuming issue #${ISSUE_NUMBER}: ${ISSUE_TITLE} ==="
 log "=== Repo: ${REPO_NAME_WITH_OWNER} | Branch: ${PR_BRANCH} ==="
 
 REPO_NAME="${REPO_NAME_WITH_OWNER##*/}"
 WORKSPACE="/workspaces/${REPO_NAME}-${ISSUE_NUMBER}"
+
+save_state running $$
 
 # ── Workspace ────────────────────────────────────────────────────────────────
 if [[ -d "$WORKSPACE/.git" ]]; then
@@ -133,6 +153,9 @@ else
         --body "Pull request raised: ${PR_URL}" 2>&1 | tee -a "$LOGFILE"
 fi
 
+PR_NUMBER="${PR_URL##*/}"
+save_state running $$
+
 # ── Move to In Review ─────────────────────────────────────────────────────────
 if [[ -n "${STATUS_FIELD_ID:-}" && -n "${ITEM_ID:-}" && -n "${PROJECT_ID:-}" ]]; then
     IN_REVIEW_OPTION_ID="$(
@@ -150,3 +173,7 @@ if [[ -n "${STATUS_FIELD_ID:-}" && -n "${ITEM_ID:-}" && -n "${PROJECT_ID:-}" ]];
         log "=== Moved issue #${ISSUE_NUMBER} to In Review ==="
     fi
 fi
+
+save_state completed
+trap "rm -f '$LOCKFILE'" EXIT
+log "=== Resume task complete ==="
