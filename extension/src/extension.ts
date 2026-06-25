@@ -71,32 +71,20 @@ function loadTasks(): Task[] {
 
 // ── Tree nodes ────────────────────────────────────────────────────────────────
 
-const STATUS_ICON: Record<Status, string> = {
-    running:    '$(sync~spin)',
-    dispatched: '$(clock)',
-    stale:      '$(warning)',
-    completed:  '$(check)',
-    failed:     '$(error)',
-    unknown:    '$(circle-outline)',
-};
-
 type Node = TaskNode | DetailNode;
 
 class TaskNode extends vscode.TreeItem {
     constructor(public readonly task: Task) {
-        super(
-            `${STATUS_ICON[task.status]}  ${task.title}`,
-            vscode.TreeItemCollapsibleState.Collapsed,
-        );
-        this.description = task.status;
-        this.tooltip     = `${task.title}\n${task.repo} · ${task.type}`;
+        super(task.title, vscode.TreeItemCollapsibleState.Collapsed);
+        this.description  = task.status;
+        this.tooltip      = `${task.title}\n${task.repo} · ${task.type}`;
         this.contextValue = 'task';
     }
 }
 
 class DetailNode extends vscode.TreeItem {
-    constructor(icon: string, label: string, value: string, url?: string) {
-        super(`${icon}  ${label}`, vscode.TreeItemCollapsibleState.None);
+    constructor(label: string, value: string, url?: string) {
+        super(`${label}:`, vscode.TreeItemCollapsibleState.None);
         this.description = value;
         if (url) {
             this.command = { command: 'vscode.open', title: 'Open', arguments: [vscode.Uri.parse(url)] };
@@ -109,41 +97,40 @@ function buildDetails(task: Task): DetailNode[] {
     const items: DetailNode[] = [];
 
     if (task.issueUrl && task.issueNumber) {
-        items.push(new DetailNode('$(issues)', 'Ticket',
+        items.push(new DetailNode('Ticket',
             `#${task.issueNumber} · ${task.title}`, task.issueUrl));
     }
     if (task.branch) {
         const branchUrl = task.repo
             ? `https://github.com/${task.repo}/tree/${task.branch}`
             : undefined;
-        items.push(new DetailNode('$(git-branch)', 'Branch', task.branch, branchUrl));
+        items.push(new DetailNode('Branch', task.branch, branchUrl));
     }
     if (task.prUrl) {
-        items.push(new DetailNode('$(git-pull-request)', 'Pull Request',
+        items.push(new DetailNode('Pull Request',
             task.prNumber ? `#${task.prNumber}` : task.prUrl, task.prUrl));
     }
     if (task.workspacePath) {
-        const node = new DetailNode('$(folder)', 'Workspace', task.workspacePath);
+        const node = new DetailNode('Workspace', task.workspacePath);
         node.command = {
-            command: 'graceHopper.openWorkspace',
-            title:   'Open Workspace',
+            command:   'graceHopper.openWorkspace',
+            title:     'Open Workspace',
             arguments: [task.workspacePath],
         };
         items.push(node);
     }
     if (task.pid !== undefined) {
         const alive = isPidAlive(task.pid);
-        items.push(new DetailNode('$(terminal)', 'Process',
-            `PID ${task.pid} · ${alive ? 'running' : 'exited'}`));
+        items.push(new DetailNode('Process', `PID ${task.pid} · ${alive ? 'running' : 'exited'}`));
     }
     if (task.failedRunId) {
-        items.push(new DetailNode('$(beaker)', 'Failed Run', task.failedRunId));
+        items.push(new DetailNode('Failed Run', task.failedRunId));
     }
     if (task.skipReason) {
-        items.push(new DetailNode('$(info)', 'Note', task.skipReason));
+        items.push(new DetailNode('', task.skipReason));
     }
     if (task.updatedAt) {
-        items.push(new DetailNode('$(history)', 'Updated', task.updatedAt));
+        items.push(new DetailNode('Updated', task.updatedAt));
     }
 
     return items;
@@ -166,7 +153,7 @@ class GraceHopperProvider implements vscode.TreeDataProvider<Node> {
     getChildren(element?: Node): Node[] {
         if (!element) {
             if (this.cache.length === 0) {
-                return [new DetailNode('$(circle-slash)', 'No tasks yet', STATE_DIR)];
+                return [new DetailNode('No tasks yet', STATE_DIR)];
             }
             return this.cache.map(t => new TaskNode(t));
         }
