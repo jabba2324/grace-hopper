@@ -6,10 +6,15 @@
 set -euo pipefail
 
 LOG_DIR="/app/state/logs"
-mkdir -p "$LOG_DIR"
+LOCK_DIR="/app/state/active"
+mkdir -p "$LOG_DIR" "$LOCK_DIR"
 LOGFILE="$LOG_DIR/issue-${ISSUE_NUMBER}-$(date +%Y%m%d-%H%M%S).log"
+LOCKFILE="$LOCK_DIR/issue-${ISSUE_NUMBER}.lock"
 
 log() { echo "$*" | tee -a "$LOGFILE"; }
+
+echo $$ > "$LOCKFILE"
+trap "rm -f '$LOCKFILE'" EXIT
 
 log "=== Starting task for issue #${ISSUE_NUMBER}: ${ISSUE_TITLE} ==="
 log "=== Repo: ${REPO_NAME_WITH_OWNER} ==="
