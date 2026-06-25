@@ -72,6 +72,11 @@
           "group": "inline@1"
         },
         {
+          "command": "graceHopper.resumeTask",
+          "when": "view == graceHopper && viewItem == failedTask",
+          "group": "inline@1"
+        },
+        {
           "command": "graceHopper.tailLogs",
           "when": "view == graceHopper && viewItem =~ /Task/",
           "group": "inline@2"

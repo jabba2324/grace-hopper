@@ -281,7 +281,7 @@ while kill -0 "$CLAUDE_PID" 2>/dev/null; do
     fi
 done
 
-wait "$CLAUDE_PID" 2>/dev/null; CLAUDE_EXIT=$?
+wait "$CLAUDE_PID" 2>/dev/null || true; CLAUDE_EXIT=$?
 wait "$TEE_PID"  2>/dev/null || true
 
 if [[ "$PAUSED" == "true" ]]; then

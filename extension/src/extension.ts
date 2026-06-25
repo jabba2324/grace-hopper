@@ -132,6 +132,7 @@ class TaskNode extends vscode.TreeItem {
         // contextValue drives the inline button visibility in package.json menus
         this.contextValue = task.status === 'running' ? 'runningTask'
                           : task.status === 'paused'  ? 'pausedTask'
+                          : task.status === 'failed'  ? 'failedTask'
                           : task.logPath              ? 'completedTask'
                           : 'task';
     }
@@ -200,11 +201,12 @@ function buildDetails(task: Task): DetailNode[] {
         };
         items.push(node);
     }
-    if (task.status === 'paused') {
-        const node = new DetailNode('Resume', 'allow Grace to pick this up again');
+    if (task.status === 'paused' || task.status === 'failed') {
+        const label = task.status === 'paused' ? 'Resume' : 'Retry';
+        const node  = new DetailNode(label, 'allow Grace to pick this up again');
         node.command = {
             command:   'graceHopper.resumeTask',
-            title:     'Resume',
+            title:     label,
             arguments: [task.issueNumber, task.title],
         };
         items.push(node);
