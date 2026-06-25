@@ -68,7 +68,7 @@ function mergeByIssue(tasks: Task[]): Task[] {
             // Merge: keep best status, accumulate non-null fields
             const merged: Task = { ...existing };
             for (const [k, v] of Object.entries(t) as [keyof Task, unknown][]) {
-                if (v != null && !merged[k]) { (merged as Record<string, unknown>)[k] = v; }
+                if (v != null && !merged[k]) { (merged as unknown as Record<string, unknown>)[k] = v; }
             }
             merged.status = STATUS_ORDER[t.status] < STATUS_ORDER[existing.status]
                 ? t.status : existing.status;
