@@ -1,0 +1,21 @@
+# Secrets
+.env
+.keys
+
+# Docker volumes (generated at runtime)
+workspaces/
+state/
+
+# macOS
+.DS_Store
+
+# Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Python
+__pycache__/
+*.pyc
+*.pyo

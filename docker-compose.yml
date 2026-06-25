@@ -1,0 +1,36 @@
+name: grace-hopper
+
+services:
+  agent:
+    build: .
+    image: grace-hopper
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      # Model to use — balance cost vs capability:
+      #   claude-haiku-4-5-20251001   cheapest, fast, good for most tasks
+      #   claude-sonnet-4-6           mid-range (default)
+      #   claude-opus-4-8             most capable, most expensive
+      - CLAUDE_MODEL=${CLAUDE_MODEL:-claude-sonnet-4-6}
+      # Ponytail lazy-dev mode: lite | full | ultra | off
+      - PONYTAIL_DEFAULT_MODE=${PONYTAIL_DEFAULT_MODE:-full}
+      - GITHUB_TOKEN=${GITHUB_TOKEN}
+      - GITHUB_USERNAME=${GITHUB_USERNAME}
+      # GitHub Projects v2 — repo the project board is linked to (owner/repo)
+      - GITHUB_REPO=${GITHUB_REPO}
+      - GITHUB_PROJECT_NUMBER=${GITHUB_PROJECT_NUMBER}
+      # Status field values in your project board (exact strings, case-sensitive)
+      - PROJECT_STATUS_TODO=${PROJECT_STATUS_TODO:-Todo}
+      - PROJECT_STATUS_IN_PROGRESS=${PROJECT_STATUS_IN_PROGRESS:-In Progress}
+      - PROJECT_STATUS_IN_REVIEW=${PROJECT_STATUS_IN_REVIEW:-In Review}
+      # How often to poll the project board (seconds)
+      - POLL_INTERVAL=${POLL_INTERVAL:-60}
+      # Optional: default git author identity
+      - GIT_AUTHOR_NAME=${GIT_AUTHOR_NAME:-Agent}
+      - GIT_AUTHOR_EMAIL=${GIT_AUTHOR_EMAIL:-mail@chrissewell.net}
+    volumes:
+      - ./workspaces:/workspaces
+      - ./state:/app/state
+    restart: unless-stopped
+    # Allow git operations and subprocess spawning
+    security_opt:
+      - no-new-privileges:false
