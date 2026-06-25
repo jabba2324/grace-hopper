@@ -9,11 +9,20 @@
   "activationEvents": ["onStartupFinished"],
   "main": "./out/extension.js",
   "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "grace-hopper-container",
+          "title": "Grace Hopper",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
     "views": {
-      "explorer": [
+      "grace-hopper-container": [
         {
           "id": "graceHopper",
-          "name": "Grace Hopper"
+          "name": "Tasks"
         }
       ]
     },
