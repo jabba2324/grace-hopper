@@ -131,18 +131,22 @@ def save_dispatched(ids: set) -> None:
     DISPATCHED_FILE.write_text(json.dumps(list(ids)))
 
 
-def is_active(issue_number: int) -> bool:
-    """Return True if a task script is actively running for this issue."""
+def is_active(issue_number: int) -> tuple[bool, bool]:
+    """
+    Returns (is_running, had_stale_lock).
+    had_stale_lock is True when a lockfile existed but the process was dead —
+    callers can use this to invalidate previously-dispatched work.
+    """
     lockfile = LOCK_DIR / f"issue-{issue_number}.lock"
     if not lockfile.exists():
-        return False
+        return False, False
     try:
         pid = int(lockfile.read_text().strip())
         os.kill(pid, 0)
-        return True
+        return True, False
     except (ValueError, ProcessLookupError, PermissionError):
         lockfile.unlink(missing_ok=True)
-        return False
+        return False, True
 
 
 def get_branch_sha(repo_nwo: str, issue_number: int) -> str | None:
@@ -354,10 +358,18 @@ def poll_ci(ci_dispatched: set) -> set:
             continue
 
         # Key on pr+sha+run so a new failing run always triggers a fresh fix attempt
+        running, stale = is_active(issue_number)
+        if running:
+            log.info("PR #%s — CI fix actively running, skipping", pr_number)
+            continue
+
         dispatch_key = f"{pr_number}:{head_sha}:{failed_run_id}"
-        if dispatch_key in ci_dispatched:
+        if dispatch_key in ci_dispatched and not stale:
             log.info("PR #%s — run %s already dispatched, skipping", pr_number, failed_run_id)
             continue
+        if stale:
+            log.info("PR #%s — stale CI fix lock found, retrying run %s", pr_number, failed_run_id)
+            ci_dispatched.discard(dispatch_key)
 
         log.info("PR #%s (issue #%s) — failing CI run %s, dispatching fix",
                  pr_number, issue_number, failed_run_id)
@@ -398,7 +410,8 @@ def poll_resume() -> None:
         issue_url    = content.get("url") or ""
         repo_nwo     = content["repository"]["nameWithOwner"]
 
-        if is_active(issue_number):
+        running, _ = is_active(issue_number)
+        if running:
             log.info("Issue #%s — In Progress and actively running, skipping", issue_number)
             continue
 
