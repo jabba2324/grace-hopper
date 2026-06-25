@@ -199,6 +199,15 @@ def item_status(item: dict) -> str | None:
     return None
 
 
+def _write_state(entry: dict) -> None:
+    try:
+        task_state.upsert(entry)
+        log.debug("State written: issue #%s type=%s status=%s",
+                  entry.get("issueNumber"), entry.get("type"), entry.get("status"))
+    except Exception as exc:
+        log.error("Failed to write tasks.json: %s", exc)
+
+
 # ── Todo polling ─────────────────────────────────────────────────────────────
 
 def dispatch_task(item: dict, project_id: str, status_field_id: str, in_progress_option_id: str) -> None:
@@ -211,7 +220,7 @@ def dispatch_task(item: dict, project_id: str, status_field_id: str, in_progress
 
     log.info("Dispatching issue #%s from %s: %s", issue_number, repo_nwo, issue_title)
 
-    task_state.upsert({
+    _write_state({
         "issueNumber": issue_number,
         "type":        "task",
         "status":      "dispatched",
@@ -272,7 +281,7 @@ def poll_once(dispatched: set) -> set:
             log.debug("Skipping %s — already dispatched", issue_ref)
             # Ensure it exists in tasks.json even if script hasn't written it yet
             if content:
-                task_state.upsert({
+                _write_state({
                     "issueNumber": content.get("number", 0),
                     "type":        "task",
                     "status":      "dispatched",
@@ -334,7 +343,7 @@ def dispatch_ci_fix(repo_nwo: str, issue_number: int, issue_title: str,
     log.info("Dispatching CI fix for PR #%s (issue #%s, run %s)",
              pr_number, issue_number, failed_run_id)
 
-    task_state.upsert({
+    _write_state({
         "issueNumber":  issue_number,
         "type":         "ci-fix",
         "status":       "dispatched",
@@ -390,7 +399,7 @@ def poll_ci(ci_dispatched: set) -> set:
         failed_run_id = get_failing_run_id(repo_nwo, pr_branch)
         if not failed_run_id:
             log.info("PR #%s (issue #%s) — CI passing or no runs yet", pr_number, issue_number)
-            task_state.upsert({
+            _write_state({
                 "issueNumber": issue_number,
                 "type":        "ci-fix",
                 "status":      "completed",
@@ -407,11 +416,24 @@ def poll_ci(ci_dispatched: set) -> set:
         running, stale = is_active(issue_number)
         if running:
             log.info("PR #%s — CI fix actively running, skipping", pr_number)
+            _write_state({
+                "issueNumber": issue_number, "type": "ci-fix", "status": "running",
+                "title": issue_title, "repo": repo_nwo,
+                "prNumber": pr_number, "branch": pr_branch,
+                "prUrl": f"https://github.com/{repo_nwo}/pull/{pr_number}",
+            })
             continue
 
         dispatch_key = f"{pr_number}:{head_sha}:{failed_run_id}"
         if dispatch_key in ci_dispatched and not stale:
             log.info("PR #%s — run %s already dispatched, skipping", pr_number, failed_run_id)
+            _write_state({
+                "issueNumber": issue_number, "type": "ci-fix", "status": "completed",
+                "title": issue_title, "repo": repo_nwo,
+                "prNumber": pr_number, "branch": pr_branch,
+                "prUrl": f"https://github.com/{repo_nwo}/pull/{pr_number}",
+                "failedRunId": failed_run_id,
+            })
             continue
         if stale:
             log.info("PR #%s — stale CI fix lock found, retrying run %s", pr_number, failed_run_id)
