@@ -28,10 +28,17 @@ log() { echo "$*" | tee -a "$LOGFILE"; }
 PR_URL=""
 PR_NUMBER="${PR_NUMBER:-}"
 
+# Map mode to the type stored in tasks.json so worker updates match
+# the initial entry the poller wrote (type="task" for new/resume tasks).
+case "$TASK_MODE" in
+    new|resume) STATE_TYPE="task" ;;
+    *)          STATE_TYPE="$TASK_MODE" ;;
+esac
+
 save_state() {
     local status="$1" pid="${2:-}"
     TASK_ISSUE_NUMBER="$ISSUE_NUMBER" \
-    TASK_TYPE="$TASK_MODE" \
+    TASK_TYPE="$STATE_TYPE" \
     TASK_STATUS="$status" \
     TASK_TITLE="$ISSUE_TITLE" \
     TASK_REPO="$REPO_NAME_WITH_OWNER" \

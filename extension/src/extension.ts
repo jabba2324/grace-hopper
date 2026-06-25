@@ -41,7 +41,10 @@ function liveStatus(task: Task): Status {
     // Use lock file existence — PIDs are from the agent container and can't
     // be checked from code-server (different PID namespace).
     if (lockExists(task.issueNumber)) { return 'running'; }
-    if (task.status === 'running' || task.status === 'dispatched') { return 'stale'; }
+    // Only mark stale if the task was actively running; dispatched just means
+    // the poller sent it but save_state hasn't updated yet — leave it as-is
+    // so it doesn't fight against a 'completed' entry in the merge.
+    if (task.status === 'running') { return 'stale'; }
     return task.status;
 }
 
@@ -325,7 +328,7 @@ export function activate(context: vscode.ExtensionContext): void {
         context.subscriptions.push(tasksWatcher, lockWatcher);
     } catch (e) { out.appendLine(`Watcher error: ${e}`); }
 
-    const timer = setInterval(() => provider.refresh(), 15_000);
+    const timer = setInterval(() => provider.refresh(), 5_000);
     context.subscriptions.push({ dispose: () => clearInterval(timer) });
 }
 
