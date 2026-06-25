@@ -35,6 +35,21 @@
       {
         "command": "graceHopper.openWorkspace",
         "title": "Open Workspace Folder"
+      },
+      {
+        "command": "graceHopper.pauseTask",
+        "title": "Pause Task",
+        "icon": "$(debug-pause)"
+      },
+      {
+        "command": "graceHopper.resumeTask",
+        "title": "Resume Task",
+        "icon": "$(debug-continue)"
+      },
+      {
+        "command": "graceHopper.tailLogs",
+        "title": "Tail Logs",
+        "icon": "$(output)"
       }
     ],
     "menus": {
@@ -43,6 +58,23 @@
           "command": "graceHopper.refresh",
           "when": "view == graceHopper",
           "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "graceHopper.pauseTask",
+          "when": "view == graceHopper && viewItem == runningTask",
+          "group": "inline@1"
+        },
+        {
+          "command": "graceHopper.resumeTask",
+          "when": "view == graceHopper && viewItem == pausedTask",
+          "group": "inline@1"
+        },
+        {
+          "command": "graceHopper.tailLogs",
+          "when": "view == graceHopper && viewItem =~ /Task/",
+          "group": "inline@2"
         }
       ]
     }

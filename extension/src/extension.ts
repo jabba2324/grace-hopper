@@ -125,7 +125,11 @@ class TaskNode extends vscode.TreeItem {
         super(task.title, vscode.TreeItemCollapsibleState.Collapsed);
         this.description  = STATUS_LABEL[task.status];
         this.tooltip      = `${task.title}\n${task.repo} · ${task.type}`;
-        this.contextValue = 'task';
+        // contextValue drives the inline button visibility in package.json menus
+        this.contextValue = task.status === 'running' ? 'runningTask'
+                          : task.status === 'paused'  ? 'pausedTask'
+                          : task.logPath              ? 'completedTask'
+                          : 'task';
     }
 }
 
@@ -256,40 +260,50 @@ export function activate(context: vscode.ExtensionContext): void {
             );
         }),
 
-        vscode.commands.registerCommand('graceHopper.pauseTask', (issueNumber: number, title: string) => {
-            const pauseFile = path.join(STATE_DIR, `pause-${issueNumber}`);
-            fs.writeFileSync(pauseFile, '');
-            vscode.window.showInformationMessage(
-                `Pause requested for "${title}" — Claude will stop within ~5 seconds`
-            );
-        }),
-
-        vscode.commands.registerCommand('graceHopper.resumeTask', (issueNumber: number, title: string) => {
-            try {
-                const tasks: unknown[] = JSON.parse(fs.readFileSync(TASKS_FILE, 'utf8'));
-                for (const t of tasks as Record<string, unknown>[]) {
-                    if (t['issueNumber'] === issueNumber && t['status'] === 'paused') {
-                        t['status'] = 'dispatched';
-                        delete t['pid'];
-                    }
-                }
-                fs.writeFileSync(TASKS_FILE, JSON.stringify(tasks, null, 2));
+        vscode.commands.registerCommand('graceHopper.pauseTask',
+            (arg: TaskNode | number, title?: string) => {
+                const n = arg instanceof TaskNode ? arg.task.issueNumber : arg;
+                const t = arg instanceof TaskNode ? arg.task.title : (title ?? `#${n}`);
+                fs.writeFileSync(path.join(STATE_DIR, `pause-${n}`), '');
                 vscode.window.showInformationMessage(
-                    `"${title}" resumed — Grace will pick it up on the next poll`
+                    `Pausing "${t}" — Claude will stop within ~5 seconds`
                 );
-            } catch (e) {
-                vscode.window.showErrorMessage(`Failed to resume: ${e}`);
-            }
-        }),
+            }),
 
-        vscode.commands.registerCommand('graceHopper.tailLogs', (logPath: string, title: string) => {
-            const terminal = vscode.window.createTerminal({
-                name: title ?? 'Grace Hopper Logs',
-                location: vscode.TerminalLocation.Panel,
-            });
-            terminal.sendText(`tail -f "${logPath}"`);
-            terminal.show();
-        }),
+        vscode.commands.registerCommand('graceHopper.resumeTask',
+            (arg: TaskNode | number, title?: string) => {
+                const n = arg instanceof TaskNode ? arg.task.issueNumber : arg;
+                const t = arg instanceof TaskNode ? arg.task.title : (title ?? `#${n}`);
+                try {
+                    const tasks = JSON.parse(fs.readFileSync(TASKS_FILE, 'utf8')) as Record<string, unknown>[];
+                    for (const entry of tasks) {
+                        if (entry['issueNumber'] === n && entry['status'] === 'paused') {
+                            entry['status'] = 'dispatched';
+                            delete entry['pid'];
+                        }
+                    }
+                    fs.writeFileSync(TASKS_FILE, JSON.stringify(tasks, null, 2));
+                    vscode.window.showInformationMessage(
+                        `"${t}" resumed — Grace will pick it up on the next poll`
+                    );
+                } catch (e) {
+                    vscode.window.showErrorMessage(`Failed to resume: ${e}`);
+                }
+            }),
+
+        vscode.commands.registerCommand('graceHopper.tailLogs',
+            (arg: TaskNode | string, title?: string) => {
+                const logPath = arg instanceof TaskNode ? arg.task.logPath : arg;
+                const name    = arg instanceof TaskNode ? arg.task.title   : (title ?? 'Logs');
+                if (!logPath) { return; }
+                const terminal = vscode.window.createTerminal({
+                    name,
+                    location: vscode.TerminalLocation.Panel,
+                });
+                terminal.sendText(`tail -f "${logPath}"`);
+                terminal.show();
+            }),
+
     );
 
     try {
