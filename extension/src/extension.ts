@@ -126,9 +126,6 @@ function buildDetails(task: Task): DetailNode[] {
     if (task.failedRunId) {
         items.push(new DetailNode('Failed Run', task.failedRunId));
     }
-    if (task.skipReason) {
-        items.push(new DetailNode('', task.skipReason));
-    }
     if (task.updatedAt) {
         items.push(new DetailNode('Updated', task.updatedAt));
     }
