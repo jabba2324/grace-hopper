@@ -15,17 +15,7 @@ for var in "${required_vars[@]}"; do
     fi
 done
 
-# Configure git identity
-git config --global user.name  "${GIT_AUTHOR_NAME:-Agent}"
-git config --global user.email "${GIT_AUTHOR_EMAIL:-agent@localhost}"
-
-# Use token for all github.com HTTPS operations
-git config --global credential.helper store
-printf 'https://%s:%s@github.com\n' "$GITHUB_USERNAME" "$GITHUB_TOKEN" \
-    > /home/agent/.git-credentials
-
-# Trust /workspaces so git doesn't complain about ownership inside clones
-git config --global --add safe.directory '*'
+source /app/scripts/setup_auth.sh
 
 # Accept Claude Code's one-time trust prompt non-interactively
 mkdir -p /home/agent/.claude

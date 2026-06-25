@@ -98,6 +98,22 @@ Todo → In Progress → In Review
 
 Write issues clearly — the title and body are passed directly to Claude as the task goal.
 
+## VS Code in the browser
+
+Grace Hopper ships a `code-server` service that runs VS Code in the browser, sharing the same `workspaces/` volume as the agent. This lets you jump into any active workspace, inspect what the agent has done, and make changes in the exact same environment — same Node.js, Python, `gh` CLI, and git credentials.
+
+Access it at `http://<your-vps>:8080` using the password set in `.env`.
+
+```bash
+# Set in .env before starting
+CODE_SERVER_PASSWORD=your-strong-password
+CODE_SERVER_PORT=8080   # optional, defaults to 8080
+```
+
+The agent's workspaces appear as folders inside the VS Code file explorer. You can open a terminal and run the same tools the agent uses (`gh`, `git`, `pytest`, etc.).
+
+> **Security:** For a production VPS, put code-server behind a reverse proxy with TLS (nginx, Caddy, Traefik) rather than exposing port 8080 directly. Alternatively, bind to localhost and access via SSH tunnel: `ssh -L 8080:localhost:8080 user@your-vps`.
+
 ## Ponytail integration
 
 Grace Hopper uses [Ponytail](https://github.com/DietrichGebert/ponytail) to enforce a "lazy senior developer" philosophy on every task — favouring the simplest solution that works over unnecessary abstraction or verbosity.
@@ -142,7 +158,9 @@ State files in `./state/`:
 ├── docker-compose.yml
 ├── requirements.txt
 ├── scripts/
-│   ├── entrypoint.sh           # Startup: configures git/auth, fetches Ponytail, starts poller
+│   ├── setup_auth.sh           # Shared git/gh auth setup (sourced by both services)
+│   ├── entrypoint.sh           # Agent startup: auth + Ponytail + poller
+│   ├── code_server.sh          # code-server startup: auth + VS Code web server
 │   ├── poll_projects.py        # Main polling loop (Todo / resume / CI fix)
 │   ├── run_task.sh             # New ticket: clone → branch → Claude → push → PR
 │   ├── resume_task.sh          # Interrupted task: checkout → summarise state → Claude → push → PR

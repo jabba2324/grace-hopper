@@ -34,6 +34,9 @@ USER root
 # Claude Code (global, accessible to agent user)
 RUN npm install -g @anthropic-ai/claude-code
 
+# code-server — VS Code in the browser
+RUN curl -fsSL https://code-server.dev/install.sh | sh
+
 COPY requirements.txt /app/requirements.txt
 RUN pip3 install --break-system-packages -r /app/requirements.txt
 
