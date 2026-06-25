@@ -338,38 +338,40 @@ def poll_ci(ci_dispatched: set) -> set:
     if project is None:
         return ci_dispatched
 
-    for item in project["items"]["nodes"]:
-        content = item.get("content") or {}
-        if not content:
-            continue
-        if item_status(item) != STATUS_IN_REVIEW:
-            continue
+    in_review = [
+        item for item in project["items"]["nodes"]
+        if item.get("content") and item_status(item) == STATUS_IN_REVIEW
+    ]
+    log.info("CI sweep: %d In Review item(s)", len(in_review))
 
-        issue_number  = content["number"]
-        issue_title   = content["title"]
-        issue_body    = content.get("body") or ""
-        repo_nwo      = content["repository"]["nameWithOwner"]
+    for item in in_review:
+        content      = item["content"]
+        issue_number = content["number"]
+        issue_title  = content["title"]
+        issue_body   = content.get("body") or ""
+        repo_nwo     = content["repository"]["nameWithOwner"]
 
         pr = find_pr_for_issue(repo_nwo, issue_number)
         if not pr:
-            log.debug("Issue #%s is In Review but no open PR found", issue_number)
+            log.info("Issue #%s — In Review but no open PR found", issue_number)
             continue
 
-        pr_number  = pr["number"]
-        pr_branch  = pr["headRefName"]
-        head_sha   = pr["headRefOid"]
-
-        # Key on pr+sha so a new commit after a fix is treated as a fresh failure
-        dispatch_key = f"{pr_number}:{head_sha}"
-        if dispatch_key in ci_dispatched:
-            continue
+        pr_number = pr["number"]
+        pr_branch = pr["headRefName"]
+        head_sha  = pr["headRefOid"]
 
         failed_run_id = get_failing_run_id(repo_nwo, pr_branch)
         if not failed_run_id:
-            log.debug("PR #%s — no failing runs", pr_number)
+            log.info("PR #%s (issue #%s) — CI passing or no runs yet", pr_number, issue_number)
             continue
 
-        log.info("PR #%s (issue #%s) has a failing CI run (%s)",
+        # Key on pr+sha+run so a new failing run always triggers a fresh fix attempt
+        dispatch_key = f"{pr_number}:{head_sha}:{failed_run_id}"
+        if dispatch_key in ci_dispatched:
+            log.info("PR #%s — run %s already dispatched, skipping", pr_number, failed_run_id)
+            continue
+
+        log.info("PR #%s (issue #%s) — failing CI run %s, dispatching fix",
                  pr_number, issue_number, failed_run_id)
 
         ci_dispatched.add(dispatch_key)
