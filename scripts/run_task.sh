@@ -37,29 +37,6 @@ DEFAULT_BRANCH="$(git remote show origin | awk '/HEAD branch/{print $NF}')"
 # ── Branch ───────────────────────────────────────────────────────────────────
 git checkout -b "$BRANCH" 2>&1 | tee -a "$LOGFILE" || git checkout "$BRANCH" 2>&1 | tee -a "$LOGFILE"
 
-# ── Fetch recent CI failures for context ─────────────────────────────────────
-CI_CONTEXT=""
-FAILED_RUN_ID="$(gh run list --repo "$REPO_NAME_WITH_OWNER" --status failure --limit 1 --json databaseId --jq '.[0].databaseId' 2>/dev/null || true)"
-if [[ -n "$FAILED_RUN_ID" ]]; then
-    log "Fetching logs for failed CI run ${FAILED_RUN_ID}..."
-    FAILED_LOGS="$(gh run view "$FAILED_RUN_ID" --repo "$REPO_NAME_WITH_OWNER" --log-failed 2>/dev/null | head -300 || true)"
-    if [[ -n "$FAILED_LOGS" ]]; then
-        CI_CONTEXT="$(cat <<CI
-
-## Recent CI failure (run ${FAILED_RUN_ID})
-
-The most recent failed workflow run produced these logs. Use them to understand
-what is broken — you can also run \`gh run list\` and \`gh run view <id> --log-failed\`
-to inspect other runs.
-
-\`\`\`
-${FAILED_LOGS}
-\`\`\`
-CI
-)"
-    fi
-fi
-
 # ── Build goal prompt ────────────────────────────────────────────────────────
 GOAL_FILE="$(mktemp)"
 cat > "$GOAL_FILE" <<GOAL
@@ -68,7 +45,7 @@ You are an autonomous software engineer. Your task is described in a GitHub issu
 ## Issue #${ISSUE_NUMBER}: ${ISSUE_TITLE}
 
 ${ISSUE_BODY}
-${CI_CONTEXT}
+
 ## Tools available
 
 - \`gh\` CLI is authenticated — use it freely to inspect CI runs, PRs, and issues:
@@ -96,8 +73,6 @@ log "=== Claude version: $(claude --version 2>&1) ==="
 # ── Run Claude Code ───────────────────────────────────────────────────────────
 log "=== Running Claude Code ==="
 
-# Pass the goal via env var to avoid shell re-interpretation of the content.
-# Redirect stdin from /dev/null so no interactive prompt can block.
 export CLAUDE_PROMPT
 CLAUDE_PROMPT="$(cat "$GOAL_FILE")"
 rm -f "$GOAL_FILE"
