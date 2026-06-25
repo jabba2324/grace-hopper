@@ -26,7 +26,7 @@ save_state() {
     TASK_PR_NUMBER="${PR_NUMBER:-}" \
     TASK_PR_URL="https://github.com/${REPO_NAME_WITH_OWNER}/pull/${PR_NUMBER}" \
     TASK_FAILED_RUN_ID="${FAILED_RUN_ID:-}" \
-    python3 /app/scripts/update_state.py 2>/dev/null || true
+    python3 /app/scripts/update_state.py 2>>"$LOGFILE" || log "WARNING: save_state failed (status=${1})"
 }
 
 echo $$ > "$LOCKFILE"

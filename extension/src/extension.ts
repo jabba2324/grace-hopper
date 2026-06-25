@@ -54,15 +54,46 @@ function getCurrentBranch(workspacePath: string): string | null {
 
 // ── Load tasks ────────────────────────────────────────────────────────────────
 
+const STATUS_ORDER: Record<Status, number> = {
+    running: 0, stale: 1, dispatched: 2, failed: 3, completed: 4, unknown: 5,
+};
+
+function mergeByIssue(tasks: Task[]): Task[] {
+    const byIssue = new Map<number, Task>();
+    for (const t of tasks) {
+        const existing = byIssue.get(t.issueNumber);
+        if (!existing) {
+            byIssue.set(t.issueNumber, { ...t });
+        } else {
+            // Merge: keep best status, accumulate non-null fields
+            const merged: Task = { ...existing };
+            for (const [k, v] of Object.entries(t) as [keyof Task, unknown][]) {
+                if (v != null && !merged[k]) { (merged as Record<string, unknown>)[k] = v; }
+            }
+            merged.status = STATUS_ORDER[t.status] < STATUS_ORDER[existing.status]
+                ? t.status : existing.status;
+            // Always prefer the most informative title (non-generic)
+            if (t.title && !t.title.startsWith('CI fix')) { merged.title = t.title; }
+            byIssue.set(t.issueNumber, merged);
+        }
+    }
+    return [...byIssue.values()];
+}
+
 function loadTasks(): Task[] {
     try {
-        const tasks: Task[] = JSON.parse(fs.readFileSync(TASKS_FILE, 'utf8'));
-        out.appendLine(`tasks.json: ${tasks.length} record(s)`);
-        return tasks.map(t => ({
+        const raw: Task[] = JSON.parse(fs.readFileSync(TASKS_FILE, 'utf8'));
+        out.appendLine(`tasks.json: ${raw.length} record(s)`);
+        const withLiveStatus = raw.map(t => ({
             ...t,
             status: liveStatus(t),
             branch: t.branch ?? (t.workspacePath ? getCurrentBranch(t.workspacePath) ?? undefined : undefined),
         }));
+        const merged = mergeByIssue(withLiveStatus);
+        out.appendLine(`After merge: ${merged.length} issue(s)`);
+        return merged.sort((a, b) =>
+            STATUS_ORDER[a.status] - STATUS_ORDER[b.status] || b.issueNumber - a.issueNumber
+        );
     } catch (e) {
         out.appendLine(`Cannot read tasks.json: ${e}`);
         return [];

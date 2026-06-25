@@ -28,7 +28,7 @@ save_state() {
     TASK_PID="${2:-}" \
     TASK_PR_URL="${PR_URL:-}" \
     TASK_PR_NUMBER="${PR_NUMBER:-}" \
-    python3 /app/scripts/update_state.py 2>/dev/null || true
+    python3 /app/scripts/update_state.py 2>>"$LOGFILE" || log "WARNING: save_state failed (status=${1})"
 }
 
 echo $$ > "$LOCKFILE"

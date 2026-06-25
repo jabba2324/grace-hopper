@@ -45,6 +45,9 @@ def upsert(entry: dict) -> None:
     existing = next((t for t in tasks if _key(t["issueNumber"], t["type"]) == k), None)
     if existing:
         existing.update({k: v for k, v in entry.items() if v is not None})
+        # Clear pid when task is no longer running
+        if entry.get("status") in ("completed", "failed") and "pid" in existing:
+            del existing["pid"]
         existing["updatedAt"] = _now()
     else:
         entry.setdefault("startedAt", _now())
