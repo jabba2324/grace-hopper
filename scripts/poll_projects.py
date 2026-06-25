@@ -254,6 +254,10 @@ def poll(project: dict, status_field: dict) -> None:
 
         # ── In Progress ───────────────────────────────────────────────────────
         elif board_status == STATUS_IN_PROGRESS:
+            entry = get_entry(issue_number)
+            if entry and entry.get("status") == "paused":
+                log.info("Issue #%s — paused by user, skipping", issue_number)
+                continue
             running, stale = is_active(issue_number)
             if running:
                 log.info("Issue #%s — actively running", issue_number)

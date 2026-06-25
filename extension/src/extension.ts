@@ -7,7 +7,7 @@ const STATE_DIR  = '/app/state';
 const TASKS_FILE = path.join(STATE_DIR, 'tasks.json');
 const LOCK_DIR   = path.join(STATE_DIR, 'active');
 
-type Status   = 'running' | 'dispatched' | 'stale' | 'completed' | 'failed' | 'unknown';
+type Status   = 'running' | 'dispatched' | 'stale' | 'completed' | 'failed' | 'paused' | 'unknown';
 type TaskType = 'task' | 'resume' | 'ci-fix';
 
 interface Task {
@@ -54,23 +54,23 @@ function getCurrentBranch(workspacePath: string): string | null {
 
 // ── Load tasks ────────────────────────────────────────────────────────────────
 
-// Lower = higher display priority when merging multiple entries per issue
 const STATUS_ORDER: Record<Status, number> = {
     running:    0,
     stale:      1,
     failed:     2,
     completed:  3,
     dispatched: 4,
-    unknown:    5,
+    paused:     5,
+    unknown:    6,
 };
 
-// Map internal states to the kanban board column names
 const STATUS_LABEL: Record<Status, string> = {
     running:    'In Progress',
     dispatched: 'In Progress',
     stale:      'In Progress',
     failed:     'Failed',
     completed:  'In Review',
+    paused:     'Paused',
     unknown:    'In Progress',
 };
 
@@ -183,6 +183,24 @@ function buildDetails(task: Task): DetailNode[] {
         node.tooltip = task.logPath;
         items.push(node);
     }
+    if (task.status === 'running') {
+        const node = new DetailNode('Pause', 'stop Claude and pause this task');
+        node.command = {
+            command:   'graceHopper.pauseTask',
+            title:     'Pause',
+            arguments: [task.issueNumber, task.title],
+        };
+        items.push(node);
+    }
+    if (task.status === 'paused') {
+        const node = new DetailNode('Resume', 'allow Grace to pick this up again');
+        node.command = {
+            command:   'graceHopper.resumeTask',
+            title:     'Resume',
+            arguments: [task.issueNumber, task.title],
+        };
+        items.push(node);
+    }
     if (task.updatedAt) {
         items.push(new DetailNode('Updated', task.updatedAt));
     }
@@ -236,6 +254,32 @@ export function activate(context: vscode.ExtensionContext): void {
             vscode.commands.executeCommand(
                 'vscode.openFolder', vscode.Uri.file(wsPath), { forceNewWindow: false },
             );
+        }),
+
+        vscode.commands.registerCommand('graceHopper.pauseTask', (issueNumber: number, title: string) => {
+            const pauseFile = path.join(STATE_DIR, `pause-${issueNumber}`);
+            fs.writeFileSync(pauseFile, '');
+            vscode.window.showInformationMessage(
+                `Pause requested for "${title}" — Claude will stop within ~5 seconds`
+            );
+        }),
+
+        vscode.commands.registerCommand('graceHopper.resumeTask', (issueNumber: number, title: string) => {
+            try {
+                const tasks: unknown[] = JSON.parse(fs.readFileSync(TASKS_FILE, 'utf8'));
+                for (const t of tasks as Record<string, unknown>[]) {
+                    if (t['issueNumber'] === issueNumber && t['status'] === 'paused') {
+                        t['status'] = 'dispatched';
+                        delete t['pid'];
+                    }
+                }
+                fs.writeFileSync(TASKS_FILE, JSON.stringify(tasks, null, 2));
+                vscode.window.showInformationMessage(
+                    `"${title}" resumed — Grace will pick it up on the next poll`
+                );
+            } catch (e) {
+                vscode.window.showErrorMessage(`Failed to resume: ${e}`);
+            }
         }),
 
         vscode.commands.registerCommand('graceHopper.tailLogs', (logPath: string, title: string) => {

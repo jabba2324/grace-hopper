@@ -236,7 +236,7 @@ GOAL
     ;;
 esac
 
-# ── Run Claude ────────────────────────────────────────────────────────────────
+# ── Run Claude (with pause support) ──────────────────────────────────────────
 
 log "=== Claude version: $(claude --version 2>&1) ==="
 log "=== Running Claude ==="
@@ -245,10 +245,45 @@ export CLAUDE_PROMPT
 CLAUDE_PROMPT="$(cat "$GOAL_FILE")"
 rm -f "$GOAL_FILE"
 
-claude --dangerously-skip-permissions --model "${CLAUDE_MODEL:-claude-sonnet-4-6}" \
-    -p "$CLAUDE_PROMPT" < /dev/null 2>&1 | tee -a "$LOGFILE"
+PAUSE_FILE="/app/state/pause-${ISSUE_NUMBER}"
+PAUSED=false
 
-CLAUDE_EXIT="${PIPESTATUS[0]}"
+# Use a named pipe so we get separate PIDs for claude and tee
+FIFO="$(mktemp -u /tmp/gh-fifo-XXXXXX)"
+mkfifo "$FIFO"
+
+tee -a "$LOGFILE" < "$FIFO" &
+TEE_PID=$!
+
+claude --dangerously-skip-permissions --model "${CLAUDE_MODEL:-claude-sonnet-4-6}" \
+    -p "$CLAUDE_PROMPT" < /dev/null > "$FIFO" 2>&1 &
+CLAUDE_PID=$!
+
+rm -f "$FIFO"  # safe once both ends are open
+
+# Poll for pause signal while Claude runs
+while kill -0 "$CLAUDE_PID" 2>/dev/null; do
+    sleep 5
+    if [[ -f "$PAUSE_FILE" ]]; then
+        log "=== Pause requested — stopping Claude ==="
+        kill -TERM "$CLAUDE_PID" 2>/dev/null || true
+        wait "$CLAUDE_PID" 2>/dev/null || true
+        rm -f "$PAUSE_FILE"
+        PAUSED=true
+        break
+    fi
+done
+
+wait "$CLAUDE_PID" 2>/dev/null; CLAUDE_EXIT=$?
+wait "$TEE_PID"  2>/dev/null || true
+
+if [[ "$PAUSED" == "true" ]]; then
+    log "=== Task paused — workspace preserved, will resume on next dispatch ==="
+    save_state paused
+    trap "rm -f '$LOCKFILE'" EXIT
+    exit 0
+fi
+
 if [[ "$CLAUDE_EXIT" -ne 0 ]]; then
     log "=== ERROR: Claude exited with code ${CLAUDE_EXIT} ==="
     exit 1
