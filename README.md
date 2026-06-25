@@ -4,21 +4,13 @@ An autonomous software engineering agent that runs on Docker. It watches a GitHu
 
 ## How it works
 
-Every poll cycle Grace runs three sweeps:
+Every poll cycle Grace scans all board items and responds to their state:
 
-**1. New tickets (Todo → In Progress)**
-- Picks up tickets in the **Todo** column, moves them to **In Progress**, clones the repo, and creates a feature branch
-- Claude Code implements the changes and commits them
-- The branch is pushed, a PR is opened, the issue is commented with the PR link, and the ticket moves to **In Review**
+**Todo** → clone the repo, create a branch, run Claude, push, open a PR, move to **In Progress → In Review**
 
-**2. Interrupted tasks (In Progress, no active process)**
-- If a task is still **In Progress** but the process died (crash, container restart), Grace detects the stale lockfile and resumes
-- Claude is given the current git log, diff, and status so it can understand what was already done and continue from where it left off
+**In Progress (no active process)** → task was interrupted; Grace resumes it by checking out the branch and giving Claude a summary of what was already done
 
-**3. Failing CI (In Review → fix loop)**
-- For every **In Review** ticket, Grace finds the open PR and checks for failing CI runs
-- If CI is failing, it fetches the failure logs, checks out the branch, and asks Claude to fix the failures
-- After pushing, CI reruns automatically; Grace keeps iterating until CI is green
+**In Review (CI failing)** → fetch the failure logs, run Claude to fix them, push, CI reruns automatically. Grace keeps iterating until CI is green.
 
 ## Prerequisites
 
@@ -161,10 +153,10 @@ State files in `./state/`:
 │   ├── setup_auth.sh           # Shared git/gh auth setup (sourced by both services)
 │   ├── entrypoint.sh           # Agent startup: auth + Ponytail + poller
 │   ├── code_server.sh          # code-server startup: auth + VS Code web server
-│   ├── poll_projects.py        # Main polling loop (Todo / resume / CI fix)
-│   ├── run_task.sh             # New ticket: clone → branch → Claude → push → PR
-│   ├── resume_task.sh          # Interrupted task: checkout → summarise state → Claude → push → PR
-│   └── fix_ci.sh               # Failing CI: fetch logs → Claude → push → rerun
+│   ├── poll_projects.py        # Single polling loop — handles Todo/In Progress/In Review
+│   ├── worker.sh               # Unified worker: TASK_MODE=new|resume|ci-fix
+│   ├── state.py                # tasks.json read/write module
+│   └── update_state.py         # CLI wrapper for state.py (called from worker.sh)
 ├── workspaces/                 # Cloned repositories (Docker volume, gitignored)
 └── state/                      # Dispatcher state, logs, lockfiles (Docker volume, gitignored)
 ```

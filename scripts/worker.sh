@@ -1,0 +1,307 @@
+#!/usr/bin/env bash
+# Unified worker — handles new tasks, resumes, and CI fixes.
+#
+# Required env vars (set by poll_projects.py):
+#   TASK_MODE               new | resume | ci-fix
+#   REPO_NAME_WITH_OWNER    owner/repo
+#   ISSUE_NUMBER            GitHub issue number
+#   ISSUE_TITLE             Issue title
+#   ISSUE_BODY              Issue body
+#   PROJECT_ID, ITEM_ID, STATUS_FIELD_ID   for board updates
+#
+# Mode-specific:
+#   resume:  PR_BRANCH
+#   ci-fix:  PR_NUMBER, PR_BRANCH, FAILED_RUN_ID
+set -euo pipefail
+
+LOG_DIR="/app/state/logs"
+LOCK_DIR="/app/state/active"
+mkdir -p "$LOG_DIR" "$LOCK_DIR"
+
+LOGFILE="$LOG_DIR/${TASK_MODE}-issue-${ISSUE_NUMBER}-$(date +%Y%m%d-%H%M%S).log"
+LOCKFILE="$LOCK_DIR/issue-${ISSUE_NUMBER}.lock"
+
+log() { echo "$*" | tee -a "$LOGFILE"; }
+
+# ── State helper ──────────────────────────────────────────────────────────────
+
+PR_URL=""
+PR_NUMBER="${PR_NUMBER:-}"
+
+save_state() {
+    local status="$1" pid="${2:-}"
+    TASK_ISSUE_NUMBER="$ISSUE_NUMBER" \
+    TASK_TYPE="$TASK_MODE" \
+    TASK_STATUS="$status" \
+    TASK_TITLE="$ISSUE_TITLE" \
+    TASK_REPO="$REPO_NAME_WITH_OWNER" \
+    TASK_BRANCH="${BRANCH:-${PR_BRANCH:-}}" \
+    TASK_WORKSPACE="$WORKSPACE" \
+    TASK_LOG="$LOGFILE" \
+    TASK_PID="$pid" \
+    TASK_PR_URL="${PR_URL:-}" \
+    TASK_PR_NUMBER="${PR_NUMBER:-}" \
+    TASK_FAILED_RUN_ID="${FAILED_RUN_ID:-}" \
+    python3 /app/scripts/update_state.py 2>>"$LOGFILE" \
+        || log "WARNING: save_state failed (status=$status)"
+}
+
+echo $$ > "$LOCKFILE"
+trap "save_state failed; rm -f '$LOCKFILE'" EXIT
+
+log "=== [${TASK_MODE}] issue #${ISSUE_NUMBER}: ${ISSUE_TITLE} ==="
+log "=== Repo: ${REPO_NAME_WITH_OWNER} ==="
+
+REPO_NAME="${REPO_NAME_WITH_OWNER##*/}"
+WORKSPACE="/workspaces/${REPO_NAME}-${ISSUE_NUMBER}"
+
+# ── Git setup (mode-specific) ─────────────────────────────────────────────────
+
+case "$TASK_MODE" in
+
+new)
+    BRANCH_SLUG="$(echo "$ISSUE_TITLE" | tr '[:upper:]' '[:lower:]' \
+        | sed 's/[^a-z0-9]/-/g' | sed 's/--*/-/g' | cut -c1-40 | sed 's/-$//')"
+    BRANCH="issue/${ISSUE_NUMBER}/${BRANCH_SLUG}"
+
+    if [[ -d "$WORKSPACE/.git" ]]; then
+        log "Workspace exists — resetting to default branch"
+        git -C "$WORKSPACE" fetch origin 2>&1 | tee -a "$LOGFILE"
+        DEFAULT_BRANCH="$(git -C "$WORKSPACE" remote show origin | awk '/HEAD branch/{print $NF}')"
+        git -C "$WORKSPACE" checkout "$DEFAULT_BRANCH" 2>&1 | tee -a "$LOGFILE"
+        git -C "$WORKSPACE" reset --hard "origin/$DEFAULT_BRANCH" 2>&1 | tee -a "$LOGFILE"
+    else
+        git clone "https://${GITHUB_USERNAME}:${GITHUB_TOKEN}@github.com/${REPO_NAME_WITH_OWNER}.git" \
+            "$WORKSPACE" 2>&1 | tee -a "$LOGFILE"
+    fi
+    cd "$WORKSPACE"
+    DEFAULT_BRANCH="$(git remote show origin | awk '/HEAD branch/{print $NF}')"
+    git checkout -b "$BRANCH" 2>&1 | tee -a "$LOGFILE" \
+        || git checkout "$BRANCH" 2>&1 | tee -a "$LOGFILE"
+    ;;
+
+resume)
+    BRANCH="${PR_BRANCH}"
+    if [[ -d "$WORKSPACE/.git" ]]; then
+        log "Workspace exists — syncing branch"
+        git -C "$WORKSPACE" fetch origin 2>&1 | tee -a "$LOGFILE"
+        git -C "$WORKSPACE" checkout "$BRANCH" 2>&1 | tee -a "$LOGFILE"
+        git -C "$WORKSPACE" reset --hard "origin/${BRANCH}" 2>/dev/null \
+            || git -C "$WORKSPACE" reset --hard HEAD 2>&1 | tee -a "$LOGFILE"
+    else
+        log "No workspace — cloning"
+        git clone "https://${GITHUB_USERNAME}:${GITHUB_TOKEN}@github.com/${REPO_NAME_WITH_OWNER}.git" \
+            "$WORKSPACE" 2>&1 | tee -a "$LOGFILE"
+        git -C "$WORKSPACE" checkout "$BRANCH" 2>&1 | tee -a "$LOGFILE"
+    fi
+    cd "$WORKSPACE"
+    DEFAULT_BRANCH="$(git remote show origin | awk '/HEAD branch/{print $NF}')"
+    ;;
+
+ci-fix)
+    BRANCH="${PR_BRANCH}"
+    if [[ -d "$WORKSPACE/.git" ]]; then
+        log "Workspace exists — switching to PR branch"
+        git -C "$WORKSPACE" fetch origin 2>&1 | tee -a "$LOGFILE"
+        git -C "$WORKSPACE" checkout "$BRANCH" 2>&1 | tee -a "$LOGFILE"
+        git -C "$WORKSPACE" reset --hard "origin/${BRANCH}" 2>&1 | tee -a "$LOGFILE"
+    else
+        log "No workspace — cloning"
+        git clone "https://${GITHUB_USERNAME}:${GITHUB_TOKEN}@github.com/${REPO_NAME_WITH_OWNER}.git" \
+            "$WORKSPACE" 2>&1 | tee -a "$LOGFILE"
+        git -C "$WORKSPACE" checkout "$BRANCH" 2>&1 | tee -a "$LOGFILE"
+    fi
+    cd "$WORKSPACE"
+    DEFAULT_BRANCH="$(git remote show origin | awk '/HEAD branch/{print $NF}')"
+    log "Fetching CI failure logs for run ${FAILED_RUN_ID}..."
+    FAILED_LOGS="$(gh run view "$FAILED_RUN_ID" \
+        --repo "$REPO_NAME_WITH_OWNER" --log-failed 2>/dev/null | head -400 || true)"
+    ;;
+
+*)
+    log "ERROR: unknown TASK_MODE '${TASK_MODE}'"
+    exit 1
+    ;;
+esac
+
+save_state running $$
+
+# ── Build Claude prompt (mode-specific) ───────────────────────────────────────
+
+GOAL_FILE="$(mktemp)"
+
+case "$TASK_MODE" in
+
+new)
+cat > "$GOAL_FILE" <<GOAL
+You are an autonomous software engineer. Your task is described in a GitHub issue.
+
+## Issue #${ISSUE_NUMBER}: ${ISSUE_TITLE}
+
+${ISSUE_BODY}
+
+## Tools available
+
+\`gh\` CLI is authenticated — use it to inspect CI, PRs, and issues:
+    gh run list --repo ${REPO_NAME_WITH_OWNER} --status failure
+    gh run view <id> --log-failed
+    gh pr checks <pr>
+
+## Instructions
+
+1. Understand the issue thoroughly before making changes.
+2. Implement the required changes.
+3. Write or update tests where appropriate.
+4. Ensure all existing tests pass.
+5. Stage and commit all changes with a clear descriptive message.
+
+Do NOT create a pull request — the system handles that automatically.
+Do not ask for confirmation — work autonomously to completion.
+GOAL
+    ;;
+
+resume)
+GIT_LOG="$(git log "${DEFAULT_BRANCH}..HEAD" --oneline 2>/dev/null || git log --oneline -10)"
+GIT_STATUS="$(git status --short)"
+GIT_DIFF_STAT="$(git diff "${DEFAULT_BRANCH}..HEAD" --stat 2>/dev/null || true)"
+
+cat > "$GOAL_FILE" <<GOAL
+You are resuming an in-progress task that was interrupted. Review what was
+already done and continue from where the previous session left off.
+
+## Issue #${ISSUE_NUMBER}: ${ISSUE_TITLE}
+
+${ISSUE_BODY}
+
+## Work already completed on branch \`${BRANCH}\`
+
+Commits ahead of ${DEFAULT_BRANCH}:
+\`\`\`
+${GIT_LOG:-  (none — branch has no commits yet)}
+\`\`\`
+
+Files changed so far:
+\`\`\`
+${GIT_DIFF_STAT:-  (none)}
+\`\`\`
+
+Uncommitted changes:
+\`\`\`
+${GIT_STATUS:-  (working tree is clean)}
+\`\`\`
+
+## Instructions
+
+1. Read the changed files to understand what was already implemented.
+2. Determine what remains to fully resolve the issue.
+3. Continue without redoing completed work.
+4. Ensure all tests pass.
+5. Stage and commit remaining changes.
+
+Do NOT create a pull request — the system handles that automatically.
+Do not ask for confirmation — work autonomously to completion.
+GOAL
+    ;;
+
+ci-fix)
+cat > "$GOAL_FILE" <<GOAL
+You are fixing a failing CI pipeline on PR #${PR_NUMBER}.
+
+## Issue #${ISSUE_NUMBER}: ${ISSUE_TITLE}
+
+${ISSUE_BODY}
+
+## Failing CI logs (run ${FAILED_RUN_ID})
+
+\`\`\`
+${FAILED_LOGS}
+\`\`\`
+
+## Tools available
+
+    gh run view ${FAILED_RUN_ID} --repo ${REPO_NAME_WITH_OWNER} --log-failed
+    gh run list --repo ${REPO_NAME_WITH_OWNER} --branch ${BRANCH}
+    gh pr checks ${PR_NUMBER} --repo ${REPO_NAME_WITH_OWNER}
+
+## Instructions
+
+1. Read the failure logs carefully to understand what is failing and why.
+2. Fix the failing tests or build errors only — do not change unrelated code.
+3. Ensure all tests pass.
+4. Stage and commit your fixes with a clear message explaining what was fixed.
+
+Do NOT create a pull request — one already exists as PR #${PR_NUMBER}.
+Do not ask for confirmation — work autonomously to completion.
+GOAL
+    ;;
+esac
+
+# ── Run Claude ────────────────────────────────────────────────────────────────
+
+log "=== Claude version: $(claude --version 2>&1) ==="
+log "=== Running Claude ==="
+
+export CLAUDE_PROMPT
+CLAUDE_PROMPT="$(cat "$GOAL_FILE")"
+rm -f "$GOAL_FILE"
+
+claude --dangerously-skip-permissions --model "${CLAUDE_MODEL:-claude-sonnet-4-6}" \
+    -p "$CLAUDE_PROMPT" < /dev/null 2>&1 | tee -a "$LOGFILE"
+
+CLAUDE_EXIT="${PIPESTATUS[0]}"
+if [[ "$CLAUDE_EXIT" -ne 0 ]]; then
+    log "=== ERROR: Claude exited with code ${CLAUDE_EXIT} ==="
+    exit 1
+fi
+
+log "=== Implementation complete ==="
+
+# ── Push + PR + board update ─────────────────────────────────────────────────
+
+git push -u origin "$BRANCH" 2>&1 | tee -a "$LOGFILE"
+
+if [[ "$TASK_MODE" == "ci-fix" ]]; then
+    # PR already exists — just update state
+    PR_URL="$(gh pr view "$BRANCH" --repo "$REPO_NAME_WITH_OWNER" --json url --jq '.url' 2>/dev/null || true)"
+    log "=== CI fix pushed — CI will rerun on PR #${PR_NUMBER} ==="
+else
+    # Create PR if it doesn't exist yet
+    EXISTING_PR="$(gh pr view "$BRANCH" --repo "$REPO_NAME_WITH_OWNER" \
+        --json url --jq '.url' 2>/dev/null || true)"
+    if [[ -n "$EXISTING_PR" ]]; then
+        PR_URL="$EXISTING_PR"
+        log "=== PR already exists: ${PR_URL} ==="
+    else
+        PR_URL="$(gh pr create \
+            --repo "$REPO_NAME_WITH_OWNER" \
+            --title "$ISSUE_TITLE" \
+            --body "Closes #${ISSUE_NUMBER}" \
+            --base "$DEFAULT_BRANCH" \
+            --head "$BRANCH" 2>&1 | tee -a "$LOGFILE" | tail -1)"
+        log "=== PR created: ${PR_URL} ==="
+        gh issue comment "$ISSUE_NUMBER" \
+            --repo "$REPO_NAME_WITH_OWNER" \
+            --body "Pull request raised: ${PR_URL}" 2>&1 | tee -a "$LOGFILE"
+    fi
+    PR_NUMBER="${PR_URL##*/}"
+
+    # Move ticket to In Review
+    if [[ -n "${STATUS_FIELD_ID:-}" && -n "${ITEM_ID:-}" && -n "${PROJECT_ID:-}" ]]; then
+        IN_REVIEW_ID="$(gh api graphql \
+            -f query='query($id:ID!){node(id:$id){...on ProjectV2SingleSelectField{options{id name}}}}' \
+            -f id="$STATUS_FIELD_ID" \
+            --jq ".data.node.options[] | select(.name == \"${PROJECT_STATUS_IN_REVIEW:-In Review}\") | .id" \
+            2>/dev/null || true)"
+        if [[ -n "$IN_REVIEW_ID" ]]; then
+            gh api graphql \
+                -f query='mutation($p:ID!,$i:ID!,$f:ID!,$v:String!){updateProjectV2ItemFieldValue(input:{projectId:$p,itemId:$i,fieldId:$f,value:{singleSelectOptionId:$v}}){projectV2Item{id}}}' \
+                -f p="$PROJECT_ID" -f i="$ITEM_ID" -f f="$STATUS_FIELD_ID" -f v="$IN_REVIEW_ID" \
+                > /dev/null 2>&1 || true
+            log "=== Moved to In Review ==="
+        fi
+    fi
+fi
+
+save_state completed
+trap "rm -f '$LOCKFILE'" EXIT
+log "=== Done ==="

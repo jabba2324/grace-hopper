@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Polls a GitHub Projects v2 board for:
-  - Todo items        → dispatches run_task.sh
-  - In Review items   → checks PR CI status; dispatches fix_ci.sh on failure
+Single polling loop. Handles all board states (Todo / In Progress / In Review)
+in one pass. All state is tracked in state/tasks.json — no separate
+dispatched.json or ci_dispatched.json.
 """
 import json
 import logging
@@ -24,33 +24,28 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-GH_TOKEN           = os.environ["GITHUB_TOKEN"]
-_GITHUB_REPO       = os.environ["GITHUB_REPO"]
+GH_TOKEN          = os.environ["GITHUB_TOKEN"]
+_GITHUB_REPO      = os.environ["GITHUB_REPO"]
 REPO_OWNER, REPO_NAME = _GITHUB_REPO.split("/", 1)
-PROJECT_NUMBER     = int(os.environ["GITHUB_PROJECT_NUMBER"])
-STATUS_TODO        = os.environ.get("PROJECT_STATUS_TODO", "Todo")
+PROJECT_NUMBER    = int(os.environ["GITHUB_PROJECT_NUMBER"])
+STATUS_TODO       = os.environ.get("PROJECT_STATUS_TODO", "Todo")
 STATUS_IN_PROGRESS = os.environ.get("PROJECT_STATUS_IN_PROGRESS", "In Progress")
-STATUS_IN_REVIEW   = os.environ.get("PROJECT_STATUS_IN_REVIEW", "In Review")
-POLL_INTERVAL      = int(os.environ.get("POLL_INTERVAL", "60"))
-STATE_DIR          = Path("/app/state")
-DISPATCHED_FILE    = STATE_DIR / "dispatched.json"
-CI_DISPATCHED_FILE  = STATE_DIR / "ci_dispatched.json"
-LOCK_DIR            = STATE_DIR / "active"
+STATUS_IN_REVIEW  = os.environ.get("PROJECT_STATUS_IN_REVIEW", "In Review")
+POLL_INTERVAL     = int(os.environ.get("POLL_INTERVAL", "60"))
+STATE_DIR         = Path("/app/state")
+LOCK_DIR          = STATE_DIR / "active"
 
 GRAPHQL_URL = "https://api.github.com/graphql"
-GQL_HEADERS = {
-    "Authorization": f"Bearer {GH_TOKEN}",
-    "Content-Type": "application/json",
-}
-GH_ENV = {**os.environ, "GH_TOKEN": GH_TOKEN}
+GQL_HEADERS = {"Authorization": f"Bearer {GH_TOKEN}", "Content-Type": "application/json"}
+GH_ENV      = {**os.environ, "GH_TOKEN": GH_TOKEN}
 
+
+# ── GraphQL / gh helpers ──────────────────────────────────────────────────────
 
 def gql(query: str, variables: dict | None = None) -> dict:
     resp = requests.post(
-        GRAPHQL_URL,
-        headers=GQL_HEADERS,
-        json={"query": query, "variables": variables or {}},
-        timeout=30,
+        GRAPHQL_URL, headers=GQL_HEADERS,
+        json={"query": query, "variables": variables or {}}, timeout=30,
     )
     resp.raise_for_status()
     data = resp.json()
@@ -60,49 +55,36 @@ def gql(query: str, variables: dict | None = None) -> dict:
 
 
 def gh(*args: str) -> str:
-    result = subprocess.run(
-        ["gh", *args],
-        capture_output=True, text=True, env=GH_ENV,
-    )
+    result = subprocess.run(["gh", *args], capture_output=True, text=True, env=GH_ENV)
     return result.stdout.strip()
 
 
 GET_PROJECT = """
 query($owner: String!, $repo: String!, $number: Int!) {
   repository(owner: $owner, name: $repo) {
-    projectV2(number: $number) { ...ProjectFields }
-  }
-}
-fragment ProjectFields on ProjectV2 {
-  id
-  fields(first: 20) {
-    nodes {
-      ... on ProjectV2SingleSelectField {
-        id
-        name
-        options { id name }
-      }
-    }
-  }
-  items(first: 50) {
-    nodes {
+    projectV2(number: $number) {
       id
-      fieldValues(first: 20) {
+      fields(first: 20) {
         nodes {
-          ... on ProjectV2ItemFieldSingleSelectValue {
-            name
-            optionId
-            field { ... on ProjectV2SingleSelectField { name } }
-          }
+          ... on ProjectV2SingleSelectField { id name options { id name } }
         }
       }
-      content {
-        ... on Issue {
-          number
-          title
-          body
-          url
-          repository { name nameWithOwner url }
+      items(first: 50) {
+        nodes {
+          id
+          fieldValues(first: 20) {
+            nodes {
+              ... on ProjectV2ItemFieldSingleSelectValue {
+                name field { ... on ProjectV2SingleSelectField { name } }
+              }
+            }
+          }
+          content {
+            ... on Issue {
+              number title body url
+              repository { name nameWithOwner url }
+            }
+          }
         }
       }
     }
@@ -113,34 +95,37 @@ fragment ProjectFields on ProjectV2 {
 UPDATE_STATUS = """
 mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
   updateProjectV2ItemFieldValue(input: {
-    projectId: $projectId
-    itemId: $itemId
-    fieldId: $fieldId
+    projectId: $projectId itemId: $itemId fieldId: $fieldId
     value: { singleSelectOptionId: $optionId }
-  }) {
-    projectV2Item { id }
-  }
+  }) { projectV2Item { id } }
 }
 """
 
 
-def load_dispatched() -> set:
-    if DISPATCHED_FILE.exists():
-        return set(json.loads(DISPATCHED_FILE.read_text()))
-    return set()
+# ── State helpers ─────────────────────────────────────────────────────────────
+
+def _write_state(entry: dict) -> None:
+    try:
+        task_state.upsert(entry)
+    except Exception as exc:
+        log.error("Failed to write tasks.json: %s", exc)
 
 
-def save_dispatched(ids: set) -> None:
-    STATE_DIR.mkdir(parents=True, exist_ok=True)
-    DISPATCHED_FILE.write_text(json.dumps(list(ids)))
+def get_entry(issue_number: int, entry_type: str | None = None) -> dict | None:
+    """Return the tasks.json record for this issue (optionally filtered by type)."""
+    try:
+        tasks = json.loads((STATE_DIR / "tasks.json").read_text())
+        for t in tasks:
+            if t.get("issueNumber") == issue_number:
+                if entry_type is None or t.get("type") == entry_type:
+                    return t
+    except Exception:
+        pass
+    return None
 
 
 def is_active(issue_number: int) -> tuple[bool, bool]:
-    """
-    Returns (is_running, had_stale_lock).
-    had_stale_lock is True when a lockfile existed but the process was dead —
-    callers can use this to invalidate previously-dispatched work.
-    """
+    """Return (is_running, had_stale_lock)."""
     lockfile = LOCK_DIR / f"issue-{issue_number}.lock"
     if not lockfile.exists():
         return False, False
@@ -153,45 +138,6 @@ def is_active(issue_number: int) -> tuple[bool, bool]:
         return False, True
 
 
-def get_branch_sha(repo_nwo: str, issue_number: int) -> str | None:
-    """Return the HEAD SHA of the issue branch on the remote, or None."""
-    raw = gh("api", f"repos/{repo_nwo}/git/matching-refs/heads/issue/{issue_number}/",
-             "--jq", ".[0].object.sha")
-    return raw if raw and raw != "null" else None
-
-
-def load_ci_dispatched() -> set:
-    if CI_DISPATCHED_FILE.exists():
-        return set(json.loads(CI_DISPATCHED_FILE.read_text()))
-    return set()
-
-
-def save_ci_dispatched(ids: set) -> None:
-    STATE_DIR.mkdir(parents=True, exist_ok=True)
-    CI_DISPATCHED_FILE.write_text(json.dumps(list(ids)))
-
-
-def fetch_project() -> tuple[dict, dict] | tuple[None, None]:
-    """Returns (project_data, status_field) or (None, None) on error."""
-    try:
-        data = gql(GET_PROJECT, {"owner": REPO_OWNER, "repo": REPO_NAME, "number": PROJECT_NUMBER})
-    except Exception as exc:
-        log.error("Failed to fetch project: %s", exc)
-        return None, None
-
-    project = data["repository"]["projectV2"]
-    status_field = next(
-        (f for f in project["fields"]["nodes"]
-         if isinstance(f, dict) and f.get("name") == "Status"),
-        None,
-    )
-    if not status_field:
-        log.warning("No 'Status' single-select field found in project")
-        return None, None
-
-    return project, status_field
-
-
 def item_status(item: dict) -> str | None:
     for fv in item["fieldValues"]["nodes"]:
         if isinstance(fv, dict) and fv.get("field", {}).get("name") == "Status":
@@ -199,124 +145,7 @@ def item_status(item: dict) -> str | None:
     return None
 
 
-def _write_state(entry: dict) -> None:
-    try:
-        task_state.upsert(entry)
-        log.debug("State written: issue #%s type=%s status=%s",
-                  entry.get("issueNumber"), entry.get("type"), entry.get("status"))
-    except Exception as exc:
-        log.error("Failed to write tasks.json: %s", exc)
-
-
-# ── Todo polling ─────────────────────────────────────────────────────────────
-
-def dispatch_task(item: dict, project_id: str, status_field_id: str, in_progress_option_id: str) -> None:
-    content = item["content"]
-    repo_nwo      = content["repository"]["nameWithOwner"]
-    issue_number  = content["number"]
-    issue_title   = content["title"]
-    issue_body    = content.get("body") or ""
-    issue_url     = content["url"]
-
-    log.info("Dispatching issue #%s from %s: %s", issue_number, repo_nwo, issue_title)
-
-    _write_state({
-        "issueNumber": issue_number,
-        "type":        "task",
-        "status":      "dispatched",
-        "title":       issue_title,
-        "repo":        repo_nwo,
-        "issueUrl":    f"https://github.com/{repo_nwo}/issues/{issue_number}",
-    })
-
-    gql(UPDATE_STATUS, {
-        "projectId": project_id,
-        "itemId":    item["id"],
-        "fieldId":   status_field_id,
-        "optionId":  in_progress_option_id,
-    })
-
-    subprocess.Popen(
-        ["/app/scripts/run_task.sh"],
-        env={
-            **os.environ,
-            "REPO_NAME_WITH_OWNER": repo_nwo,
-            "ISSUE_NUMBER":         str(issue_number),
-            "ISSUE_TITLE":          issue_title,
-            "ISSUE_BODY":           issue_body,
-            "ISSUE_URL":            issue_url,
-            "PROJECT_ID":           project_id,
-            "ITEM_ID":              item["id"],
-            "STATUS_FIELD_ID":      status_field_id,
-        },
-    )
-
-
-def poll_once(dispatched: set) -> set:
-    project, status_field = fetch_project()
-    if project is None:
-        return dispatched
-
-    project_id         = project["id"]
-    status_field_id    = status_field["id"]
-    options_by_name    = {opt["name"]: opt["id"] for opt in status_field["options"]}
-
-    if STATUS_TODO not in options_by_name:
-        log.warning("Status option %r not found (available: %s)", STATUS_TODO, list(options_by_name))
-        return dispatched
-    if STATUS_IN_PROGRESS not in options_by_name:
-        log.warning("Status option %r not found", STATUS_IN_PROGRESS)
-        return dispatched
-
-    in_progress_option_id = options_by_name[STATUS_IN_PROGRESS]
-    items = project["items"]["nodes"]
-    log.info("Found %d item(s) in project", len(items))
-
-    for item in items:
-        item_id = item["id"]
-        content = item.get("content") or {}
-        issue_ref = f"#{content.get('number', '?')} {content.get('title', '(no content)')!r}"
-
-        if item_id in dispatched:
-            log.debug("Skipping %s — already dispatched", issue_ref)
-            # Ensure it exists in tasks.json even if script hasn't written it yet
-            if content:
-                _write_state({
-                    "issueNumber": content.get("number", 0),
-                    "type":        "task",
-                    "status":      "dispatched",
-                    "title":       content.get("title", ""),
-                    "repo":        content.get("repository", {}).get("nameWithOwner", ""),
-                    "issueUrl":    content.get("url", ""),
-                })
-            continue
-
-        status = item_status(item)
-        log.info("Item %s — status: %r", issue_ref, status)
-
-        if status != STATUS_TODO:
-            log.info("Skipping %s — status is %r, want %r", issue_ref, status, STATUS_TODO)
-            continue
-
-        if not content:
-            log.warning("Skipping item %s — no issue content attached", item_id)
-            continue
-
-        dispatched.add(item_id)
-        save_dispatched(dispatched)
-
-        try:
-            dispatch_task(item, project_id, status_field_id, in_progress_option_id)
-        except Exception as exc:
-            log.error("Failed to dispatch item %s: %s", item_id, exc)
-
-    return dispatched
-
-
-# ── CI fix polling ────────────────────────────────────────────────────────────
-
 def find_pr_for_issue(repo_nwo: str, issue_number: int) -> dict | None:
-    """Find the open PR whose branch matches issue/{number}/..."""
     raw = gh("pr", "list", "--repo", repo_nwo, "--state", "open",
              "--json", "number,headRefName,headRefOid")
     if not raw:
@@ -328,7 +157,6 @@ def find_pr_for_issue(repo_nwo: str, issue_number: int) -> dict | None:
 
 
 def get_failing_run_id(repo_nwo: str, branch: str) -> str | None:
-    """Return the databaseId of the most recent failed run on this branch, or None."""
     raw = gh("run", "list", "--repo", repo_nwo, "--branch", branch,
              "--status", "failure", "--limit", "1", "--json", "databaseId")
     if not raw:
@@ -337,208 +165,180 @@ def get_failing_run_id(repo_nwo: str, branch: str) -> str | None:
     return str(runs[0]["databaseId"]) if runs else None
 
 
-def dispatch_ci_fix(repo_nwo: str, issue_number: int, issue_title: str,
-                    issue_body: str, pr_number: int, pr_branch: str,
-                    failed_run_id: str) -> None:
-    log.info("Dispatching CI fix for PR #%s (issue #%s, run %s)",
-             pr_number, issue_number, failed_run_id)
+def get_branch_sha(repo_nwo: str, issue_number: int) -> str | None:
+    raw = gh("api", f"repos/{repo_nwo}/git/matching-refs/heads/issue/{issue_number}/",
+             "--jq", ".[0].object.sha")
+    return raw if raw and raw != "null" else None
 
-    _write_state({
-        "issueNumber":  issue_number,
-        "type":         "ci-fix",
-        "status":       "dispatched",
-        "title":        issue_title,
-        "repo":         repo_nwo,
-        "issueUrl":     f"https://github.com/{repo_nwo}/issues/{issue_number}",
-        "prNumber":     pr_number,
-        "prUrl":        f"https://github.com/{repo_nwo}/pull/{pr_number}",
-        "failedRunId":  failed_run_id,
-    })
 
+def resolve_branch(repo_nwo: str, issue_number: int, issue_title: str) -> str:
+    """Return the remote branch name, falling back to reconstructing it from title."""
+    raw = gh("api", f"repos/{repo_nwo}/git/matching-refs/heads/issue/{issue_number}/",
+             "--jq", ".[0].ref")
+    if raw and raw != "null":
+        return raw.removeprefix("refs/heads/")
+    import re
+    slug = re.sub(r"-+", "-", re.sub(r"[^a-z0-9]", "-", issue_title.lower())).strip("-")[:40]
+    return f"issue/{issue_number}/{slug}"
+
+
+def dispatch(mode: str, base_env: dict, **extra: str) -> None:
+    log.info("Dispatching %s for issue #%s", mode, base_env["ISSUE_NUMBER"])
     subprocess.Popen(
-        ["/app/scripts/fix_ci.sh"],
-        env={
-            **os.environ,
+        ["/app/scripts/worker.sh"],
+        env={**os.environ, "TASK_MODE": mode, **base_env, **extra},
+    )
+
+
+# ── Main poll ─────────────────────────────────────────────────────────────────
+
+def poll(project: dict, status_field: dict) -> None:
+    project_id      = project["id"]
+    status_field_id = status_field["id"]
+    options         = {opt["name"]: opt["id"] for opt in status_field["options"]}
+
+    in_progress_id = options.get(STATUS_IN_PROGRESS)
+    if not in_progress_id:
+        log.warning("Status option %r not found", STATUS_IN_PROGRESS)
+        return
+
+    items = project["items"]["nodes"]
+    log.info("Poll: %d item(s)", len(items))
+
+    for item in items:
+        content = item.get("content") or {}
+        if not content:
+            continue
+
+        board_status  = item_status(item)
+        issue_number  = content["number"]
+        issue_title   = content["title"]
+        issue_body    = content.get("body") or ""
+        issue_url     = content.get("url") or ""
+        repo_nwo      = content["repository"]["nameWithOwner"]
+        repo_name     = repo_nwo.split("/")[-1]
+        workspace     = f"/workspaces/{repo_name}-{issue_number}"
+
+        base_env = {
             "REPO_NAME_WITH_OWNER": repo_nwo,
             "ISSUE_NUMBER":         str(issue_number),
             "ISSUE_TITLE":          issue_title,
             "ISSUE_BODY":           issue_body,
-            "PR_NUMBER":            str(pr_number),
-            "PR_BRANCH":            pr_branch,
-            "FAILED_RUN_ID":        failed_run_id,
-        },
-    )
+            "ISSUE_URL":            issue_url,
+            "PROJECT_ID":           project_id,
+            "ITEM_ID":              item["id"],
+            "STATUS_FIELD_ID":      status_field_id,
+        }
 
-
-def poll_ci(ci_dispatched: set) -> set:
-    project, status_field = fetch_project()
-    if project is None:
-        return ci_dispatched
-
-    in_review = [
-        item for item in project["items"]["nodes"]
-        if item.get("content") and item_status(item) == STATUS_IN_REVIEW
-    ]
-    log.info("CI sweep: %d In Review item(s)", len(in_review))
-
-    for item in in_review:
-        content      = item["content"]
-        issue_number = content["number"]
-        issue_title  = content["title"]
-        issue_body   = content.get("body") or ""
-        repo_nwo     = content["repository"]["nameWithOwner"]
-
-        pr = find_pr_for_issue(repo_nwo, issue_number)
-        if not pr:
-            log.info("Issue #%s — In Review but no open PR found", issue_number)
-            continue
-
-        pr_number = pr["number"]
-        pr_branch = pr["headRefName"]
-        head_sha  = pr["headRefOid"]
-
-        issue_url     = f"https://github.com/{repo_nwo}/issues/{issue_number}"
-        repo_name     = repo_nwo.split("/")[-1]
-        workspace_path = f"/workspaces/{repo_name}-{issue_number}"
-
-        failed_run_id = get_failing_run_id(repo_nwo, pr_branch)
-        if not failed_run_id:
-            log.info("PR #%s (issue #%s) — CI passing or no runs yet", pr_number, issue_number)
+        # ── Todo ──────────────────────────────────────────────────────────────
+        if board_status == STATUS_TODO:
+            entry = get_entry(issue_number, "task")
+            if entry and entry.get("status") not in ("failed",):
+                log.debug("Issue #%s — already dispatched (%s)", issue_number, entry.get("status"))
+                continue
+            log.info("Issue #%s — new task: %s", issue_number, issue_title)
             _write_state({
-                "issueNumber":   issue_number,
-                "type":          "ci-fix",
-                "status":        "completed",
-                "title":         issue_title,
-                "repo":          repo_nwo,
-                "issueUrl":      issue_url,
-                "prNumber":      pr_number,
-                "prUrl":         f"https://github.com/{repo_nwo}/pull/{pr_number}",
-                "branch":        pr_branch,
-                "workspacePath": workspace_path,
-            })
-            continue
-
-        # Key on pr+sha+run so a new failing run always triggers a fresh fix attempt
-        running, stale = is_active(issue_number)
-        if running:
-            log.info("PR #%s — CI fix actively running, skipping", pr_number)
-            _write_state({
-                "issueNumber": issue_number, "type": "ci-fix", "status": "running",
+                "issueNumber": issue_number, "type": "task", "status": "dispatched",
                 "title": issue_title, "repo": repo_nwo,
-                "issueUrl": issue_url,
+                "issueUrl": f"https://github.com/{repo_nwo}/issues/{issue_number}",
+                "workspacePath": workspace,
+            })
+            try:
+                gql(UPDATE_STATUS, {
+                    "projectId": project_id, "itemId": item["id"],
+                    "fieldId": status_field_id, "optionId": in_progress_id,
+                })
+            except Exception as exc:
+                log.error("Failed to move issue #%s to In Progress: %s", issue_number, exc)
+            dispatch("new", base_env)
+
+        # ── In Progress ───────────────────────────────────────────────────────
+        elif board_status == STATUS_IN_PROGRESS:
+            running, stale = is_active(issue_number)
+            if running:
+                log.info("Issue #%s — actively running", issue_number)
+                continue
+            action = "stale lock, resuming" if stale else "idle, resuming"
+            log.info("Issue #%s — %s", issue_number, action)
+            pr_branch = resolve_branch(repo_nwo, issue_number, issue_title)
+            dispatch("resume", base_env, PR_BRANCH=pr_branch)
+
+        # ── In Review ─────────────────────────────────────────────────────────
+        elif board_status == STATUS_IN_REVIEW:
+            pr = find_pr_for_issue(repo_nwo, issue_number)
+            if not pr:
+                log.info("Issue #%s — In Review, no open PR found", issue_number)
+                continue
+
+            pr_number     = pr["number"]
+            pr_branch     = pr["headRefName"]
+            head_sha      = pr["headRefOid"]
+            failed_run_id = get_failing_run_id(repo_nwo, pr_branch)
+
+            if not failed_run_id:
+                log.info("PR #%s (issue #%s) — CI passing", pr_number, issue_number)
+                _write_state({
+                    "issueNumber": issue_number, "type": "ci-fix", "status": "completed",
+                    "title": issue_title, "repo": repo_nwo,
+                    "issueUrl": f"https://github.com/{repo_nwo}/issues/{issue_number}",
+                    "prNumber": pr_number, "branch": pr_branch,
+                    "prUrl": f"https://github.com/{repo_nwo}/pull/{pr_number}",
+                    "workspacePath": workspace,
+                })
+                continue
+
+            running, stale = is_active(issue_number)
+            if running:
+                log.info("PR #%s — CI fix actively running", pr_number)
+                continue
+
+            # Deduplicate: skip if we already dispatched a fix for this exact run
+            ci_entry = get_entry(issue_number, "ci-fix")
+            already_fixed = (
+                ci_entry and
+                ci_entry.get("failedRunId") == failed_run_id and
+                ci_entry.get("status") not in ("failed",) and
+                not stale
+            )
+            if already_fixed:
+                log.info("PR #%s — run %s already dispatched", pr_number, failed_run_id)
+                continue
+
+            log.info("PR #%s (issue #%s) — failing CI run %s, dispatching fix",
+                     pr_number, issue_number, failed_run_id)
+            _write_state({
+                "issueNumber": issue_number, "type": "ci-fix", "status": "dispatched",
+                "title": issue_title, "repo": repo_nwo,
+                "issueUrl": f"https://github.com/{repo_nwo}/issues/{issue_number}",
                 "prNumber": pr_number, "branch": pr_branch,
                 "prUrl": f"https://github.com/{repo_nwo}/pull/{pr_number}",
-                "workspacePath": workspace_path,
+                "workspacePath": workspace, "failedRunId": failed_run_id,
             })
-            continue
+            dispatch("ci-fix", base_env,
+                     PR_NUMBER=str(pr_number),
+                     PR_BRANCH=pr_branch,
+                     FAILED_RUN_ID=failed_run_id)
 
-        dispatch_key = f"{pr_number}:{head_sha}:{failed_run_id}"
-        if dispatch_key in ci_dispatched and not stale:
-            log.info("PR #%s — run %s already dispatched, skipping", pr_number, failed_run_id)
-            _write_state({
-                "issueNumber": issue_number, "type": "ci-fix", "status": "completed",
-                "title": issue_title, "repo": repo_nwo,
-                "issueUrl": issue_url,
-                "prNumber": pr_number, "branch": pr_branch,
-                "prUrl": f"https://github.com/{repo_nwo}/pull/{pr_number}",
-                "workspacePath": workspace_path,
-                "failedRunId": failed_run_id,
-            })
-            continue
-        if stale:
-            log.info("PR #%s — stale CI fix lock found, retrying run %s", pr_number, failed_run_id)
-            ci_dispatched.discard(dispatch_key)
-
-        log.info("PR #%s (issue #%s) — failing CI run %s, dispatching fix",
-                 pr_number, issue_number, failed_run_id)
-
-        ci_dispatched.add(dispatch_key)
-        save_ci_dispatched(ci_dispatched)
-
-        try:
-            dispatch_ci_fix(repo_nwo, issue_number, issue_title, issue_body,
-                            pr_number, pr_branch, failed_run_id)
-        except Exception as exc:
-            log.error("Failed to dispatch CI fix for PR #%s: %s", pr_number, exc)
-
-    return ci_dispatched
-
-
-# ── Resume polling ───────────────────────────────────────────────────────────
-
-def poll_resume() -> None:
-    project, status_field = fetch_project()
-    if project is None:
-        return
-
-    project_id      = project["id"]
-    status_field_id = status_field["id"]
-
-    in_progress = [
-        item for item in project["items"]["nodes"]
-        if item.get("content") and item_status(item) == STATUS_IN_PROGRESS
-    ]
-    log.info("Resume sweep: %d In Progress item(s)", len(in_progress))
-
-    for item in in_progress:
-        content      = item["content"]
-        issue_number = content["number"]
-        issue_title  = content["title"]
-        issue_body   = content.get("body") or ""
-        issue_url    = content.get("url") or ""
-        repo_nwo     = content["repository"]["nameWithOwner"]
-
-        running, _ = is_active(issue_number)
-        if running:
-            log.info("Issue #%s — In Progress and actively running, skipping", issue_number)
-            continue
-
-        # No active process — task was interrupted; resume it
-        branch_sha = get_branch_sha(repo_nwo, issue_number)
-        log.info("Issue #%s — interrupted (sha: %s), resuming", issue_number, branch_sha or "none")
-
-        # Resolve the actual remote branch name if it exists, otherwise reconstruct
-        pr_branch = f"issue/{issue_number}/" + (
-            __import__("re").sub(r"-+", "-",
-                __import__("re").sub(r"[^a-z0-9]", "-", issue_title.lower())
-            ).strip("-")[:40]
-        )
-        if branch_sha:
-            raw = gh("api", f"repos/{repo_nwo}/git/matching-refs/heads/issue/{issue_number}/",
-                     "--jq", ".[0].ref")
-            if raw and raw != "null":
-                pr_branch = raw.removeprefix("refs/heads/")
-
-        subprocess.Popen(
-            ["/app/scripts/resume_task.sh"],
-            env={
-                **os.environ,
-                "REPO_NAME_WITH_OWNER": repo_nwo,
-                "ISSUE_NUMBER":         str(issue_number),
-                "ISSUE_TITLE":          issue_title,
-                "ISSUE_BODY":           issue_body,
-                "ISSUE_URL":            issue_url,
-                "PR_BRANCH":            pr_branch,
-                "PROJECT_ID":           project_id,
-                "ITEM_ID":              item["id"],
-                "STATUS_FIELD_ID":      status_field_id,
-            },
-        )
-
-
-# ── Main ─────────────────────────────────────────────────────────────────────
 
 def main() -> None:
-    dispatched    = load_dispatched()
-    ci_dispatched = load_ci_dispatched()
-    log.info(
-        "Watching project #%s on %s/%s — polling every %ss",
-        PROJECT_NUMBER, REPO_OWNER, REPO_NAME, POLL_INTERVAL,
-    )
+    log.info("Watching project #%s on %s/%s — polling every %ss",
+             PROJECT_NUMBER, REPO_OWNER, REPO_NAME, POLL_INTERVAL)
     while True:
-        dispatched    = poll_once(dispatched)
-        poll_resume()
-        ci_dispatched = poll_ci(ci_dispatched)
+        try:
+            data = gql(GET_PROJECT, {"owner": REPO_OWNER, "repo": REPO_NAME,
+                                      "number": PROJECT_NUMBER})
+            project = data["repository"]["projectV2"]
+            status_field = next(
+                (f for f in project["fields"]["nodes"]
+                 if isinstance(f, dict) and f.get("name") == "Status"),
+                None,
+            )
+            if not status_field:
+                log.warning("No 'Status' field found in project")
+            else:
+                poll(project, status_field)
+        except Exception as exc:
+            log.error("Poll error: %s", exc)
         time.sleep(POLL_INTERVAL)
 
 
