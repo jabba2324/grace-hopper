@@ -347,8 +347,9 @@ def dispatch_ci_fix(repo_nwo: str, issue_number: int, issue_title: str,
         "issueNumber":  issue_number,
         "type":         "ci-fix",
         "status":       "dispatched",
-        "title":        f"CI fix — PR #{pr_number}",
+        "title":        issue_title,
         "repo":         repo_nwo,
+        "issueUrl":     f"https://github.com/{repo_nwo}/issues/{issue_number}",
         "prNumber":     pr_number,
         "prUrl":        f"https://github.com/{repo_nwo}/pull/{pr_number}",
         "failedRunId":  failed_run_id,
@@ -396,6 +397,8 @@ def poll_ci(ci_dispatched: set) -> set:
         pr_branch = pr["headRefName"]
         head_sha  = pr["headRefOid"]
 
+        issue_url = f"https://github.com/{repo_nwo}/issues/{issue_number}"
+
         failed_run_id = get_failing_run_id(repo_nwo, pr_branch)
         if not failed_run_id:
             log.info("PR #%s (issue #%s) — CI passing or no runs yet", pr_number, issue_number)
@@ -405,6 +408,7 @@ def poll_ci(ci_dispatched: set) -> set:
                 "status":      "completed",
                 "title":       issue_title,
                 "repo":        repo_nwo,
+                "issueUrl":    issue_url,
                 "prNumber":    pr_number,
                 "prUrl":       f"https://github.com/{repo_nwo}/pull/{pr_number}",
                 "branch":      pr_branch,
@@ -419,6 +423,7 @@ def poll_ci(ci_dispatched: set) -> set:
             _write_state({
                 "issueNumber": issue_number, "type": "ci-fix", "status": "running",
                 "title": issue_title, "repo": repo_nwo,
+                "issueUrl": issue_url,
                 "prNumber": pr_number, "branch": pr_branch,
                 "prUrl": f"https://github.com/{repo_nwo}/pull/{pr_number}",
             })
@@ -430,6 +435,7 @@ def poll_ci(ci_dispatched: set) -> set:
             _write_state({
                 "issueNumber": issue_number, "type": "ci-fix", "status": "completed",
                 "title": issue_title, "repo": repo_nwo,
+                "issueUrl": issue_url,
                 "prNumber": pr_number, "branch": pr_branch,
                 "prUrl": f"https://github.com/{repo_nwo}/pull/{pr_number}",
                 "failedRunId": failed_run_id,
