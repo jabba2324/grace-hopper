@@ -24,6 +24,7 @@ interface Task {
     logPath?:      string;
     pid?:          number;
     failedRunId?:  string;
+    skipReason?:   string;
     startedAt?:    string;
     updatedAt?:    string;
 }
@@ -137,6 +138,9 @@ function buildDetails(task: Task): DetailNode[] {
     }
     if (task.failedRunId) {
         items.push(new DetailNode('$(beaker)', 'Failed Run', task.failedRunId));
+    }
+    if (task.skipReason) {
+        items.push(new DetailNode('$(info)', 'Note', task.skipReason));
     }
     if (task.updatedAt) {
         items.push(new DetailNode('$(history)', 'Updated', task.updatedAt));

@@ -270,6 +270,16 @@ def poll_once(dispatched: set) -> set:
 
         if item_id in dispatched:
             log.debug("Skipping %s — already dispatched", issue_ref)
+            # Ensure it exists in tasks.json even if script hasn't written it yet
+            if content:
+                task_state.upsert({
+                    "issueNumber": content.get("number", 0),
+                    "type":        "task",
+                    "status":      "dispatched",
+                    "title":       content.get("title", ""),
+                    "repo":        content.get("repository", {}).get("nameWithOwner", ""),
+                    "issueUrl":    content.get("url", ""),
+                })
             continue
 
         status = item_status(item)
@@ -380,6 +390,17 @@ def poll_ci(ci_dispatched: set) -> set:
         failed_run_id = get_failing_run_id(repo_nwo, pr_branch)
         if not failed_run_id:
             log.info("PR #%s (issue #%s) — CI passing or no runs yet", pr_number, issue_number)
+            task_state.upsert({
+                "issueNumber": issue_number,
+                "type":        "ci-fix",
+                "status":      "completed",
+                "title":       issue_title,
+                "repo":        repo_nwo,
+                "prNumber":    pr_number,
+                "prUrl":       f"https://github.com/{repo_nwo}/pull/{pr_number}",
+                "branch":      pr_branch,
+                "skipReason":  "CI passing",
+            })
             continue
 
         # Key on pr+sha+run so a new failing run always triggers a fresh fix attempt
