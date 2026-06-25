@@ -1,0 +1,50 @@
+{
+  "name": "grace-hopper",
+  "displayName": "Grace Hopper",
+  "description": "Live task status for the Grace Hopper autonomous agent",
+  "version": "0.1.0",
+  "publisher": "grace-hopper",
+  "engines": { "vscode": "^1.74.0" },
+  "categories": ["Other"],
+  "activationEvents": ["onStartupFinished"],
+  "main": "./out/extension.js",
+  "contributes": {
+    "views": {
+      "explorer": [
+        {
+          "id": "graceHopper",
+          "name": "Grace Hopper"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "graceHopper.refresh",
+        "title": "Refresh",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "graceHopper.openWorkspace",
+        "title": "Open Workspace Folder"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "graceHopper.refresh",
+          "when": "view == graceHopper",
+          "group": "navigation"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "^18.0.0",
+    "@types/vscode": "^1.74.0",
+    "@vscode/vsce": "^2.0.0",
+    "typescript": "^5.0.0"
+  }
+}

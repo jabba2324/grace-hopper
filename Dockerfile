@@ -43,10 +43,20 @@ RUN pip3 install --break-system-packages -r /app/requirements.txt
 COPY scripts/ /app/scripts/
 RUN chmod +x /app/scripts/*.sh /app/scripts/*.py
 
+COPY extension/ /app/extension/
+
 RUN mkdir -p /workspaces /app/state \
-    && chown -R agent:agent /workspaces /app/state /app/scripts
+    && chown -R agent:agent /workspaces /app/state /app/scripts /app/extension
 
 USER agent
 WORKDIR /workspaces
+
+# Build and pre-install the Grace Hopper VS Code extension into code-server
+RUN cd /app/extension \
+    && npm install \
+    && npm run compile \
+    && npx vsce package --no-dependencies -o /tmp/grace-hopper.vsix \
+    && code-server --install-extension /tmp/grace-hopper.vsix \
+    && rm /tmp/grace-hopper.vsix
 
 CMD ["/app/scripts/entrypoint.sh"]
