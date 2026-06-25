@@ -33,15 +33,16 @@ let out: vscode.OutputChannel;
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-function isPidAlive(pid: number): boolean {
-    try { process.kill(pid, 0); return true; } catch { return false; }
+function lockExists(issueNumber: number): boolean {
+    return fs.existsSync(path.join(LOCK_DIR, `issue-${issueNumber}.lock`));
 }
 
 function liveStatus(task: Task): Status {
-    if (!task.pid) { return task.status; }
-    const lockFile = path.join(LOCK_DIR, `issue-${task.issueNumber}.lock`);
-    if (!fs.existsSync(lockFile)) { return task.status; }
-    return isPidAlive(task.pid) ? 'running' : 'stale';
+    // Use lock file existence — PIDs are from the agent container and can't
+    // be checked from code-server (different PID namespace).
+    if (lockExists(task.issueNumber)) { return 'running'; }
+    if (task.status === 'running' || task.status === 'dispatched') { return 'stale'; }
+    return task.status;
 }
 
 function getCurrentBranch(workspacePath: string): string | null {
@@ -171,8 +172,8 @@ function buildDetails(task: Task): DetailNode[] {
         items.push(node);
     }
     if (task.pid !== undefined) {
-        const alive = isPidAlive(task.pid);
-        items.push(new DetailNode('Process', `PID ${task.pid} · ${alive ? 'running' : 'exited'}`));
+        const running = lockExists(task.issueNumber);
+        items.push(new DetailNode('Process', `PID ${task.pid} · ${running ? 'running' : 'exited'}`));
     }
     if (task.failedRunId) {
         items.push(new DetailNode('Failed Run', task.failedRunId));
