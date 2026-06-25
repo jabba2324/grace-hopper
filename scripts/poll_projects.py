@@ -31,7 +31,6 @@ POLL_INTERVAL      = int(os.environ.get("POLL_INTERVAL", "60"))
 STATE_DIR          = Path("/app/state")
 DISPATCHED_FILE    = STATE_DIR / "dispatched.json"
 CI_DISPATCHED_FILE  = STATE_DIR / "ci_dispatched.json"
-RESUMED_FILE        = STATE_DIR / "resumed.json"
 LOCK_DIR            = STATE_DIR / "active"
 
 GRAPHQL_URL = "https://api.github.com/graphql"
@@ -130,17 +129,6 @@ def load_dispatched() -> set:
 def save_dispatched(ids: set) -> None:
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     DISPATCHED_FILE.write_text(json.dumps(list(ids)))
-
-
-def load_resumed() -> set:
-    if RESUMED_FILE.exists():
-        return set(json.loads(RESUMED_FILE.read_text()))
-    return set()
-
-
-def save_resumed(ids: set) -> None:
-    STATE_DIR.mkdir(parents=True, exist_ok=True)
-    RESUMED_FILE.write_text(json.dumps(list(ids)))
 
 
 def is_active(issue_number: int) -> bool:
@@ -388,21 +376,22 @@ def poll_ci(ci_dispatched: set) -> set:
 
 # ── Resume polling ───────────────────────────────────────────────────────────
 
-def poll_resume(resumed: set) -> set:
+def poll_resume() -> None:
     project, status_field = fetch_project()
     if project is None:
-        return resumed
+        return
 
     project_id      = project["id"]
     status_field_id = status_field["id"]
 
-    for item in project["items"]["nodes"]:
-        content = item.get("content") or {}
-        if not content:
-            continue
-        if item_status(item) != STATUS_IN_PROGRESS:
-            continue
+    in_progress = [
+        item for item in project["items"]["nodes"]
+        if item.get("content") and item_status(item) == STATUS_IN_PROGRESS
+    ]
+    log.info("Resume sweep: %d In Progress item(s)", len(in_progress))
 
+    for item in in_progress:
+        content      = item["content"]
         issue_number = content["number"]
         issue_title  = content["title"]
         issue_body   = content.get("body") or ""
@@ -410,33 +399,24 @@ def poll_resume(resumed: set) -> set:
         repo_nwo     = content["repository"]["nameWithOwner"]
 
         if is_active(issue_number):
-            log.debug("Issue #%s is In Progress and actively running — skipping", issue_number)
+            log.info("Issue #%s — In Progress and actively running, skipping", issue_number)
             continue
 
-        branch_sha  = get_branch_sha(repo_nwo, issue_number)
-        resume_key  = f"{item['id']}:{branch_sha or 'no-branch'}"
+        # No active process — task was interrupted; resume it
+        branch_sha = get_branch_sha(repo_nwo, issue_number)
+        log.info("Issue #%s — interrupted (sha: %s), resuming", issue_number, branch_sha or "none")
 
-        if resume_key in resumed:
-            log.debug("Issue #%s already resumed at sha %s", issue_number, branch_sha)
-            continue
-
+        # Resolve the actual remote branch name if it exists, otherwise reconstruct
         pr_branch = f"issue/{issue_number}/" + (
-            # Reconstruct slug from title, same logic as run_task.sh
             __import__("re").sub(r"-+", "-",
                 __import__("re").sub(r"[^a-z0-9]", "-", issue_title.lower())
             ).strip("-")[:40]
         )
-        # Prefer the actual remote branch name if the branch already exists
         if branch_sha:
             raw = gh("api", f"repos/{repo_nwo}/git/matching-refs/heads/issue/{issue_number}/",
                      "--jq", ".[0].ref")
             if raw and raw != "null":
                 pr_branch = raw.removeprefix("refs/heads/")
-
-        log.info("Resuming interrupted task for issue #%s (sha: %s)", issue_number, branch_sha or "none")
-
-        resumed.add(resume_key)
-        save_resumed(resumed)
 
         subprocess.Popen(
             ["/app/scripts/resume_task.sh"],
@@ -454,22 +434,19 @@ def poll_resume(resumed: set) -> set:
             },
         )
 
-    return resumed
-
 
 # ── Main ─────────────────────────────────────────────────────────────────────
 
 def main() -> None:
     dispatched    = load_dispatched()
     ci_dispatched = load_ci_dispatched()
-    resumed       = load_resumed()
     log.info(
         "Watching project #%s on %s/%s — polling every %ss",
         PROJECT_NUMBER, REPO_OWNER, REPO_NAME, POLL_INTERVAL,
     )
     while True:
         dispatched    = poll_once(dispatched)
-        resumed       = poll_resume(resumed)
+        poll_resume()
         ci_dispatched = poll_ci(ci_dispatched)
         time.sleep(POLL_INTERVAL)
 
