@@ -173,6 +173,16 @@ function buildDetails(task: Task): DetailNode[] {
     if (task.failedRunId) {
         items.push(new DetailNode('Failed Run', task.failedRunId));
     }
+    if (task.logPath && fs.existsSync(task.logPath)) {
+        const node = new DetailNode('Tail Logs', path.basename(task.logPath));
+        node.command = {
+            command:   'graceHopper.tailLogs',
+            title:     'Tail Logs',
+            arguments: [task.logPath, task.title],
+        };
+        node.tooltip = task.logPath;
+        items.push(node);
+    }
     if (task.updatedAt) {
         items.push(new DetailNode('Updated', task.updatedAt));
     }
@@ -226,6 +236,15 @@ export function activate(context: vscode.ExtensionContext): void {
             vscode.commands.executeCommand(
                 'vscode.openFolder', vscode.Uri.file(wsPath), { forceNewWindow: false },
             );
+        }),
+
+        vscode.commands.registerCommand('graceHopper.tailLogs', (logPath: string, title: string) => {
+            const terminal = vscode.window.createTerminal({
+                name: title ?? 'Grace Hopper Logs',
+                location: vscode.TerminalLocation.Panel,
+            });
+            terminal.sendText(`tail -f "${logPath}"`);
+            terminal.show();
         }),
     );
 
