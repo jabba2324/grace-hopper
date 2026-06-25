@@ -308,12 +308,21 @@ export function activate(context: vscode.ExtensionContext): void {
     );
 
     try {
-        const watcher = vscode.workspace.createFileSystemWatcher(
+        // Watch tasks.json for content changes
+        const tasksWatcher = vscode.workspace.createFileSystemWatcher(
             new vscode.RelativePattern(vscode.Uri.file(STATE_DIR), 'tasks.json'),
         );
-        watcher.onDidChange(() => provider.refresh());
-        watcher.onDidCreate(() => provider.refresh());
-        context.subscriptions.push(watcher);
+        tasksWatcher.onDidChange(() => provider.refresh());
+        tasksWatcher.onDidCreate(() => provider.refresh());
+
+        // Watch lock files so running/stale status flips immediately
+        const lockWatcher = vscode.workspace.createFileSystemWatcher(
+            new vscode.RelativePattern(vscode.Uri.file(path.join(STATE_DIR, 'active')), '*.lock'),
+        );
+        lockWatcher.onDidCreate(() => provider.refresh());
+        lockWatcher.onDidDelete(() => provider.refresh());
+
+        context.subscriptions.push(tasksWatcher, lockWatcher);
     } catch (e) { out.appendLine(`Watcher error: ${e}`); }
 
     const timer = setInterval(() => provider.refresh(), 15_000);
