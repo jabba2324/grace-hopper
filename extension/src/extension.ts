@@ -54,8 +54,24 @@ function getCurrentBranch(workspacePath: string): string | null {
 
 // ── Load tasks ────────────────────────────────────────────────────────────────
 
+// Lower = higher display priority when merging multiple entries per issue
 const STATUS_ORDER: Record<Status, number> = {
-    running: 0, stale: 1, dispatched: 2, failed: 3, completed: 4, unknown: 5,
+    running:    0,
+    stale:      1,
+    failed:     2,
+    completed:  3,
+    dispatched: 4,
+    unknown:    5,
+};
+
+// Map internal states to the kanban board column names
+const STATUS_LABEL: Record<Status, string> = {
+    running:    'In Progress',
+    dispatched: 'In Progress',
+    stale:      'In Progress',
+    failed:     'Failed',
+    completed:  'In Review',
+    unknown:    'In Progress',
 };
 
 function mergeByIssue(tasks: Task[]): Task[] {
@@ -107,7 +123,7 @@ type Node = TaskNode | DetailNode;
 class TaskNode extends vscode.TreeItem {
     constructor(public readonly task: Task) {
         super(task.title, vscode.TreeItemCollapsibleState.Collapsed);
-        this.description  = task.status;
+        this.description  = STATUS_LABEL[task.status];
         this.tooltip      = `${task.title}\n${task.repo} · ${task.type}`;
         this.contextValue = 'task';
     }
