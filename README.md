@@ -134,14 +134,6 @@ State files in `./state/`:
 | `resumed.json` | `item:sha` pairs already resumed to avoid re-triggering |
 | `active/issue-<N>.lock` | PID lockfiles for running task processes |
 
-### Manually retrying a failed push
-
-If a task completed but the push or PR creation failed (e.g. missing token scope):
-
-```bash
-docker exec grace-hopper-agent-1 /app/scripts/retry_push.sh <issue-number>
-```
-
 ## Repository layout
 
 ```
@@ -154,8 +146,7 @@ docker exec grace-hopper-agent-1 /app/scripts/retry_push.sh <issue-number>
 │   ├── poll_projects.py        # Main polling loop (Todo / resume / CI fix)
 │   ├── run_task.sh             # New ticket: clone → branch → Claude → push → PR
 │   ├── resume_task.sh          # Interrupted task: checkout → summarise state → Claude → push → PR
-│   ├── fix_ci.sh               # Failing CI: fetch logs → Claude → push → rerun
-│   └── retry_push.sh           # Manual recovery: push + PR for a completed but unpushed task
+│   └── fix_ci.sh               # Failing CI: fetch logs → Claude → push → rerun
 ├── workspaces/                 # Cloned repositories (Docker volume, gitignored)
 └── state/                      # Dispatcher state, logs, lockfiles (Docker volume, gitignored)
 ```
