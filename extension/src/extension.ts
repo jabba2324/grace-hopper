@@ -3,10 +3,11 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as cp from 'child_process';
 
-const STATE_DIR    = '/app/state';
-const TASKS_FILE   = path.join(STATE_DIR, 'tasks.json');
-const LOCK_DIR     = path.join(STATE_DIR, 'active');
-const CLAUDE_HOME  = '/home/agent/.claude';
+const STATE_DIR          = '/app/state';
+const TASKS_FILE         = path.join(STATE_DIR, 'tasks.json');
+const LOCK_DIR           = path.join(STATE_DIR, 'active');
+const CLAUDE_HOME        = '/home/agent/.claude';
+const PENDING_CLAUDE     = path.join(STATE_DIR, 'pending-claude.json');
 
 type Status   = 'running' | 'dispatched' | 'stale' | 'completed' | 'failed' | 'paused' | 'unknown';
 type TaskType = 'task' | 'resume' | 'ci-fix';
@@ -268,6 +269,22 @@ export function activate(context: vscode.ExtensionContext): void {
     out.appendLine(`Activated — tasks file: ${TASKS_FILE}`);
     out.appendLine(`tasks.json exists: ${fs.existsSync(TASKS_FILE)}`);
 
+    // Open a Claude terminal if a session was queued before a workspace reload
+    if (fs.existsSync(PENDING_CLAUDE)) {
+        try {
+            const { workspacePath, sessionId } = JSON.parse(fs.readFileSync(PENDING_CLAUDE, 'utf8'));
+            fs.unlinkSync(PENDING_CLAUDE);
+            const cmd = sessionId ? `claude --resume ${sessionId}` : `claude`;
+            const terminal = vscode.window.createTerminal({
+                name: `Claude — ${path.basename(workspacePath)}`,
+                location: vscode.TerminalLocation.Panel,
+                cwd: workspacePath,
+            });
+            terminal.sendText(cmd);
+            terminal.show();
+        } catch (e) { out.appendLine(`Failed to resume pending Claude session: ${e}`); }
+    }
+
     const provider = new GraceHopperProvider();
     provider.refresh();
 
@@ -357,20 +374,13 @@ export function activate(context: vscode.ExtensionContext): void {
                     vscode.window.showErrorMessage('No workspace path for this task');
                     return;
                 }
-                vscode.commands.executeCommand('workbench.view.explorer');
-                vscode.commands.executeCommand('revealInExplorer', vscode.Uri.file(workspacePath));
-
                 const sessionId = latestSessionId(workspacePath);
-                const cmd = sessionId
-                    ? `claude --resume ${sessionId}`
-                    : `claude`;
-                const terminal = vscode.window.createTerminal({
-                    name: `Claude — ${arg instanceof TaskNode ? arg.task.title : 'Task'}`,
-                    location: vscode.TerminalLocation.Panel,
-                    cwd: workspacePath,
-                });
-                terminal.sendText(cmd);
-                terminal.show();
+                // Persist the session intent so activate() can open the terminal
+                // after the window reloads into the new workspace folder.
+                fs.writeFileSync(PENDING_CLAUDE, JSON.stringify({ workspacePath, sessionId }));
+                vscode.commands.executeCommand(
+                    'vscode.openFolder', vscode.Uri.file(workspacePath), { forceNewWindow: false }
+                );
             }),
 
     );
