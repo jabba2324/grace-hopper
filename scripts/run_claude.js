@@ -35,7 +35,10 @@ if (!LOGFILE || !PROMPT) {
 }
 
 const logStream = fs.createWriteStream(LOGFILE, { flags: 'a' });
-const log = line => logStream.write(line + '\n');
+const log = line => {
+    logStream.write(line + '\n');
+    process.stdout.write(line + '\n');
+};
 
 // ── Format events ────────────────────────────────────────────────────────────
 

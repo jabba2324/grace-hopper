@@ -29,6 +29,7 @@ PR_URL=""
 PR_NUMBER="${PR_NUMBER:-}"
 SESSION_ID=""
 PREV_SESSION_ID="${PREV_SESSION_ID:-}"
+WORKSPACE=""
 
 # Map mode to the type stored in tasks.json so worker updates match
 # the initial entry the poller wrote (type="task" for new/resume tasks).
@@ -349,28 +350,21 @@ esac
 
 # ── Run Claude via stream-json runner ────────────────────────────────────────
 
-log "=== Claude version: $(claude --version 2>&1) ==="
 log "=== Running Claude ==="
 
-export CLAUDE_PROMPT CLAUDE_LOGFILE="$LOGFILE" \
-       CLAUDE_MODEL="${CLAUDE_MODEL:-claude-sonnet-4-6}" \
-       CLAUDE_CWD="$WORKSPACE" \
-       CLAUDE_RESUME_SESSION="$PREV_SESSION_ID"
-
-CLAUDE_PROMPT="$(cat "$GOAL_FILE")"
-rm -f "$GOAL_FILE"
-
-export CLAUDE_PAUSE_FILE="/app/state/pause-${ISSUE_NUMBER}"
 SESSION_FILE="$(mktemp)"
-export CLAUDE_SESSION_FILE="$SESSION_FILE"
-
-# Run the Node.js runner in the background; tail mirrors to Docker stdout
-node /app/scripts/run_claude.js &
-NODE_PID=$!
-tail -f "$LOGFILE" --pid="$NODE_PID" &
 
 RUNNER_EXIT=0
-wait "$NODE_PID" || RUNNER_EXIT=$?
+CLAUDE_PROMPT="$(cat "$GOAL_FILE")" \
+CLAUDE_LOGFILE="$LOGFILE" \
+CLAUDE_MODEL="${CLAUDE_MODEL:-claude-sonnet-4-6}" \
+CLAUDE_CWD="$WORKSPACE" \
+CLAUDE_RESUME_SESSION="$PREV_SESSION_ID" \
+CLAUDE_PAUSE_FILE="/app/state/pause-${ISSUE_NUMBER}" \
+CLAUDE_SESSION_FILE="$SESSION_FILE" \
+    node /app/scripts/run_claude.js || RUNNER_EXIT=$?
+
+rm -f "$GOAL_FILE"
 
 SESSION_ID="$(cat "$SESSION_FILE" 2>/dev/null || true)"
 rm -f "$SESSION_FILE"
