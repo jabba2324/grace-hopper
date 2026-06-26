@@ -86,6 +86,16 @@ ctx: dict = {
 
 # ── Git helper ────────────────────────────────────────────────────────────────
 
+def _ind(text: str) -> str:
+    """Pre-indent continuation lines so dedent() finds its common indent correctly.
+
+    Without this, any variable with a column-0 line (git log, issue body) would
+    cause dedent() to find 0 common indent and leave 12 leading spaces on every
+    template line.
+    """
+    return text.replace('\n', '\n            ')
+
+
 def git(*args: str, cwd: Path | None = None, check: bool = True, capture: bool = False) -> str:
     """Run a git command. Logs output unless capture=True. Raises on failure."""
     result = subprocess.run(
@@ -98,7 +108,8 @@ def git(*args: str, cwd: Path | None = None, check: bool = True, capture: bool =
     if not capture and output:
         log.info(output)
     if check and result.returncode != 0:
-        raise RuntimeError(f'git {" ".join(args)} exited {result.returncode}')
+        detail = f':\n{output}' if output else ''
+        raise RuntimeError(f'git {" ".join(args)} exited {result.returncode}{detail}')
     return output
 
 
@@ -167,7 +178,7 @@ def write_claude_md(status: str) -> None:
 
             **Issue #{ISSUE_NUM}: {ISSUE_TITLE}**
 
-            {ISSUE_BODY}
+            {_ind(ISSUE_BODY)}
 
             ## Status
 
@@ -181,17 +192,17 @@ def write_claude_md(status: str) -> None:
 
             Commits ahead of `{def_br}`:
             ```
-            {git_log}
+            {_ind(git_log)}
             ```
 
             Files changed:
             ```
-            {diff_stat}
+            {_ind(diff_stat)}
             ```
 
             Uncommitted changes:
             ```
-            {uncommit}
+            {_ind(uncommit)}
             ```
 
             ## Continuing this work
@@ -235,9 +246,9 @@ def setup_resume() -> None:
         log.info('Workspace exists — syncing branch')
         git('fetch', 'origin')
         git('checkout', PR_BRANCH)
-        if git('rev-parse', '--verify', f'origin/{PR_BRANCH}', check=False, capture=True):
+        try:
             git('reset', '--hard', f'origin/{PR_BRANCH}')
-        else:
+        except RuntimeError:
             log.info('origin/%s not found — keeping local branch as-is', PR_BRANCH)
     else:
         log.info('No workspace — cloning')
@@ -274,7 +285,7 @@ def build_prompt(failed_logs: str = '') -> str:
 
             ## Issue #{ISSUE_NUM}: {ISSUE_TITLE}
 
-            {ISSUE_BODY}
+            {_ind(ISSUE_BODY)}
 
             ## Tools available
 
@@ -313,23 +324,23 @@ def build_prompt(failed_logs: str = '') -> str:
 
             ## Issue #{ISSUE_NUM}: {ISSUE_TITLE}
 
-            {ISSUE_BODY}
+            {_ind(ISSUE_BODY)}
 
             ## Work already completed on branch `{branch}`
 
             Commits ahead of {def_br}:
             ```
-            {git_log}
+            {_ind(git_log)}
             ```
 
             Files changed so far:
             ```
-            {diff}
+            {_ind(diff)}
             ```
 
             Uncommitted changes:
             ```
-            {status}
+            {_ind(status)}
             ```
 
             ## Instructions
@@ -351,7 +362,7 @@ def build_prompt(failed_logs: str = '') -> str:
                 CI is failing on PR #{pr_num} (run {FAILED_RUN}). Fix the failures.
 
                 ```
-                {failed_logs}
+                {_ind(failed_logs)}
                 ```
 
                 Do NOT create a new pull request — one already exists as PR #{pr_num}.
@@ -362,12 +373,12 @@ def build_prompt(failed_logs: str = '') -> str:
 
             ## Issue #{ISSUE_NUM}: {ISSUE_TITLE}
 
-            {ISSUE_BODY}
+            {_ind(ISSUE_BODY)}
 
             ## Failing CI logs (run {FAILED_RUN})
 
             ```
-            {failed_logs}
+            {_ind(failed_logs)}
             ```
 
             ## Tools available
@@ -392,7 +403,9 @@ def build_prompt(failed_logs: str = '') -> str:
 # ── Claude runner ─────────────────────────────────────────────────────────────
 
 def run_claude(prompt: str) -> int:
-    session_file = Path(tempfile.mktemp())
+    fd, session_path = tempfile.mkstemp()
+    os.close(fd)
+    session_file = Path(session_path)
     env = {
         **os.environ,
         'CLAUDE_PROMPT':         prompt,
@@ -423,6 +436,23 @@ mutation($p:ID!,$i:ID!,$f:ID!,$v:String!){
 """
 
 
+def _move_board_to_in_review() -> None:
+    if not (STATUS_FIELD and ITEM_ID and PROJECT_ID):
+        return
+    try:
+        options = gql(_GET_OPTIONS, {'id': STATUS_FIELD})
+        in_review_id = next(
+            (o['id'] for o in options['node']['options'] if o['name'] == IN_REVIEW),
+            None,
+        )
+        if in_review_id:
+            gql(_MOVE_STATUS, {'p': PROJECT_ID, 'i': ITEM_ID,
+                               'f': STATUS_FIELD, 'v': in_review_id})
+            log.info('=== Moved to In Review ===')
+    except Exception as exc:
+        log.warning('Failed to move board status: %s', exc)
+
+
 def push_and_pr() -> None:
     git('push', '-u', 'origin', ctx['branch'])
 
@@ -439,6 +469,7 @@ def push_and_pr() -> None:
         ctx['pr_url']    = data['url']
         ctx['pr_number'] = str(data['number'])
         log.info('=== PR already exists: %s ===', ctx['pr_url'])
+        _move_board_to_in_review()
         return
 
     pr_out = gh('pr', 'create',
@@ -447,27 +478,15 @@ def push_and_pr() -> None:
                 '--body', f'Closes #{ISSUE_NUM}',
                 '--base', ctx['default_br'],
                 '--head', ctx['branch'])
-    ctx['pr_url']    = pr_out.splitlines()[-1].strip()
-    ctx['pr_number'] = ctx['pr_url'].split('/')[-1]
+    lines = pr_out.splitlines()
+    ctx['pr_url']    = lines[-1].strip() if lines else ''
+    ctx['pr_number'] = ctx['pr_url'].rsplit('/', 1)[-1] if ctx['pr_url'] else ''
     log.info('=== PR created: %s ===', ctx['pr_url'])
 
     gh('issue', 'comment', str(ISSUE_NUM), '--repo', REPO_NWO,
        '--body', f'Pull request raised: {ctx["pr_url"]}', check=False)
 
-    if not (STATUS_FIELD and ITEM_ID and PROJECT_ID):
-        return
-    try:
-        options = gql(_GET_OPTIONS, {'id': STATUS_FIELD})
-        in_review_id = next(
-            (o['id'] for o in options['node']['options'] if o['name'] == IN_REVIEW),
-            None,
-        )
-        if in_review_id:
-            gql(_MOVE_STATUS, {'p': PROJECT_ID, 'i': ITEM_ID,
-                               'f': STATUS_FIELD, 'v': in_review_id})
-            log.info('=== Moved to In Review ===')
-    except Exception as exc:
-        log.warning('Failed to move board status: %s', exc)
+    _move_board_to_in_review()
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 

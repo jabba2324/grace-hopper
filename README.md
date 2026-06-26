@@ -130,7 +130,7 @@ The Grace Hopper VS Code extension is automatically installed in code-server and
 - **Rebuild State** — reconciles `tasks.json` against the live GitHub board, correcting any stale or mismatched statuses
 - **Refresh** — manually re-reads `tasks.json`
 
-The panel auto-refreshes every 5 seconds and watches for lock file changes so running/stale status updates appear immediately.
+The panel auto-refreshes every 2 seconds and watches for lock file changes so running/stale status updates appear immediately.
 
 ## Human handoff
 
@@ -144,7 +144,7 @@ Either way, Claude reads `.claude/CLAUDE.md` from the workspace root — a file 
 
 **Conversation history** is persisted to `./claude-home/` on the host (a bind mount of `~/.claude` shared between the agent and code-server containers). The agent and code-server share the same Claude state — settings, preferences, and per-workspace session files — so history written by an agent run is readable from a developer session in the browser and vice versa.
 
-Note: the agent runs Claude in non-interactive `-p` mode, which doesn't create sessions resumable via `--resume`. The ✦ button passes the session ID directly, bypassing the interactive picker, but the conversation content may be limited to the prompt context rather than full turn history. The `.claude/CLAUDE.md` file is the reliable handoff mechanism.
+The agent stores its Claude session ID after every run and passes it back via `--resume` when the task continues (resume or CI-fix modes), so conversation history carries across interruptions. The ✦ button uses the same session ID to open an interactive session that picks up exactly where the agent left off. If no prior session exists, it falls back to a fresh session with `.claude/CLAUDE.md` providing the task context.
 
 ## Ponytail integration
 

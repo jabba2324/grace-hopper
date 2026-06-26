@@ -7,6 +7,7 @@ dispatched.json or ci_dispatched.json.
 import json
 import logging
 import os
+import re
 import subprocess
 import sys
 import time
@@ -120,41 +121,43 @@ def item_status(item: dict) -> str | None:
     return None
 
 
-def find_pr_for_issue(repo_nwo: str, issue_number: int) -> dict | None:
+def _fetch_open_prs(repo_nwo: str) -> list[dict]:
+    """All open PRs for the repo — fetched once per poll cycle."""
     raw = gh("pr", "list", "--repo", repo_nwo, "--state", "open",
-             "--json", "number,headRefName,headRefOid")
+             "--json", "number,headRefName")
+    return json.loads(raw) if raw else []
+
+
+def _fetch_failing_runs(repo_nwo: str) -> dict[str, str]:
+    """Latest failing run ID per branch — fetched once per poll cycle."""
+    raw = gh("run", "list", "--repo", repo_nwo, "--status", "failure",
+             "--limit", "50", "--json", "databaseId,headBranch")
     if not raw:
-        return None
-    for pr in json.loads(raw):
-        if pr["headRefName"].startswith(f"issue/{issue_number}/"):
-            return pr
-    return None
+        return {}
+    result: dict[str, str] = {}
+    for run in json.loads(raw):
+        branch = run.get("headBranch", "")
+        if branch and branch not in result:
+            result[branch] = str(run["databaseId"])
+    return result
 
 
-def get_failing_run_id(repo_nwo: str, branch: str) -> str | None:
-    raw = gh("run", "list", "--repo", repo_nwo, "--branch", branch,
-             "--status", "failure", "--limit", "1", "--json", "databaseId")
-    if not raw:
-        return None
-    runs = json.loads(raw)
-    return str(runs[0]["databaseId"]) if runs else None
-
-
-def get_branch_sha(repo_nwo: str, issue_number: int) -> str | None:
-    raw = gh("api", f"repos/{repo_nwo}/git/matching-refs/heads/issue/{issue_number}/",
-             "--jq", ".[0].object.sha")
-    return raw if raw and raw != "null" else None
-
-
-def resolve_branch(repo_nwo: str, issue_number: int, issue_title: str) -> str:
-    """Return the remote branch name, falling back to reconstructing it from title."""
-    raw = gh("api", f"repos/{repo_nwo}/git/matching-refs/heads/issue/{issue_number}/",
-             "--jq", ".[0].ref")
-    if raw and raw != "null":
-        return raw.removeprefix("refs/heads/")
-    import re
-    slug = re.sub(r"-+", "-", re.sub(r"[^a-z0-9]", "-", issue_title.lower())).strip("-")[:40]
-    return f"issue/{issue_number}/{slug}"
+def _fetch_issue_branches(repo_nwo: str) -> dict[int, str]:
+    """All remote issue/* branches → {issue_number: branch_name}, fetched once per poll cycle."""
+    raw = gh("api", f"repos/{repo_nwo}/git/matching-refs/heads/issue/",
+             "--jq", "[.[].ref]")
+    if not raw or raw == "[]":
+        return {}
+    result: dict[int, str] = {}
+    for ref in json.loads(raw):
+        branch = ref.removeprefix("refs/heads/")
+        parts = branch.split("/")
+        if len(parts) >= 3:
+            try:
+                result[int(parts[1])] = branch
+            except ValueError:
+                pass
+    return result
 
 
 def dispatch(mode: str, base_env: dict, **extra: str) -> None:
@@ -173,12 +176,24 @@ def poll(project: dict, status_field: dict) -> None:
     options         = {opt["name"]: opt["id"] for opt in status_field["options"]}
 
     in_progress_id = options.get(STATUS_IN_PROGRESS)
+    in_review_id   = options.get(STATUS_IN_REVIEW)
     if not in_progress_id:
         log.warning("Status option %r not found", STATUS_IN_PROGRESS)
         return
 
     items = project["items"]["nodes"]
     log.info("Poll: %d item(s)", len(items))
+
+    # Pre-fetch per-repo data once to avoid O(n) gh CLI calls in the loop below.
+    active_repos: set[str] = set()
+    for item in items:
+        content = item.get("content") or {}
+        if content and item_status(item) in (STATUS_IN_PROGRESS, STATUS_IN_REVIEW):
+            active_repos.add(content["repository"]["nameWithOwner"])
+
+    open_prs:       dict[str, list[dict]]     = {r: _fetch_open_prs(r)       for r in active_repos}
+    failing_runs:   dict[str, dict[str, str]] = {r: _fetch_failing_runs(r)   for r in active_repos}
+    issue_branches: dict[str, dict[int, str]] = {r: _fetch_issue_branches(r) for r in active_repos}
 
     for item in items:
         content = item.get("content") or {}
@@ -231,31 +246,50 @@ def poll(project: dict, status_field: dict) -> None:
         elif board_status == STATUS_IN_PROGRESS:
             # Check any entry type for paused/failed — don't auto-resume
             any_entry = get_entry(issue_number, "task") or get_entry(issue_number, "ci-fix")
-            if any_entry and any_entry.get("status") in ("paused", "failed"):
-                log.info("Issue #%s — %s, waiting for user action", issue_number, any_entry.get("status"))
-                continue
+            if any_entry:
+                entry_status = any_entry.get("status")
+                if entry_status in ("paused", "failed"):
+                    log.info("Issue #%s — %s, waiting for user action", issue_number, entry_status)
+                    continue
+                if entry_status == "completed" and in_review_id:
+                    # Board hasn't caught up after PR creation — sync it rather than re-running.
+                    log.info("Issue #%s — completed, syncing board to In Review", issue_number)
+                    try:
+                        gql(UPDATE_STATUS, {
+                            "projectId": project_id, "itemId": item["id"],
+                            "fieldId": status_field_id, "optionId": in_review_id,
+                        })
+                    except Exception as exc:
+                        log.warning("Failed to sync issue #%s to In Review: %s", issue_number, exc)
+                    continue
             running, stale = is_active(issue_number)
             if running:
                 log.info("Issue #%s — actively running", issue_number)
                 continue
             action = "stale lock, resuming" if stale else "idle, resuming"
             log.info("Issue #%s — %s", issue_number, action)
-            pr_branch = resolve_branch(repo_nwo, issue_number, issue_title)
+            pr_branch = issue_branches.get(repo_nwo, {}).get(issue_number)
+            if not pr_branch:
+                slug = re.sub(r"-+", "-", re.sub(r"[^a-z0-9]", "-", issue_title.lower())).strip("-")[:40]
+                pr_branch = f"issue/{issue_number}/{slug}"
             task_entry = get_entry(issue_number, "task")
             prev_session_id = (task_entry or {}).get("sessionId") or ""
             dispatch("resume", base_env, PR_BRANCH=pr_branch, PREV_SESSION_ID=prev_session_id)
 
         # ── In Review ─────────────────────────────────────────────────────────
         elif board_status == STATUS_IN_REVIEW:
-            pr = find_pr_for_issue(repo_nwo, issue_number)
+            pr = next(
+                (p for p in open_prs.get(repo_nwo, [])
+                 if p["headRefName"].startswith(f"issue/{issue_number}/")),
+                None,
+            )
             if not pr:
                 log.info("Issue #%s — In Review, no open PR found", issue_number)
                 continue
 
             pr_number     = pr["number"]
             pr_branch     = pr["headRefName"]
-            head_sha      = pr["headRefOid"]
-            failed_run_id = get_failing_run_id(repo_nwo, pr_branch)
+            failed_run_id = failing_runs.get(repo_nwo, {}).get(pr_branch)
 
             if not failed_run_id:
                 log.info("PR #%s (issue #%s) — CI passing", pr_number, issue_number)
