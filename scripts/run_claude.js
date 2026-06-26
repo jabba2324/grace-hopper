@@ -21,12 +21,13 @@
 const { spawn } = require('child_process');
 const fs        = require('fs');
 
-const LOGFILE      = process.env.CLAUDE_LOGFILE;
-const MODEL        = process.env.CLAUDE_MODEL        || 'claude-sonnet-4-6';
-const CWD          = process.env.CLAUDE_CWD          || process.cwd();
-const PAUSE_FILE   = process.env.CLAUDE_PAUSE_FILE;
-const SESSION_FILE = process.env.CLAUDE_SESSION_FILE;
-const PROMPT       = process.env.CLAUDE_PROMPT;
+const LOGFILE         = process.env.CLAUDE_LOGFILE;
+const MODEL           = process.env.CLAUDE_MODEL          || 'claude-sonnet-4-6';
+const CWD             = process.env.CLAUDE_CWD            || process.cwd();
+const PAUSE_FILE      = process.env.CLAUDE_PAUSE_FILE;
+const SESSION_FILE    = process.env.CLAUDE_SESSION_FILE;
+const PROMPT          = process.env.CLAUDE_PROMPT;
+const RESUME_SESSION  = process.env.CLAUDE_RESUME_SESSION || '';
 
 if (!LOGFILE || !PROMPT) {
     process.stderr.write('run_claude.js: CLAUDE_LOGFILE and CLAUDE_PROMPT required\n');
@@ -76,11 +77,16 @@ function fmtToolResult(block) {
 
 const args = [
     '--dangerously-skip-permissions',
-    '-p', PROMPT,
     '--output-format', 'stream-json',
     '--verbose',
     '--model', MODEL,
 ];
+
+if (RESUME_SESSION) {
+    args.push('--resume', RESUME_SESSION);
+}
+
+args.push('-p', PROMPT);
 
 const claude = spawn('claude', args, {
     cwd:   CWD,

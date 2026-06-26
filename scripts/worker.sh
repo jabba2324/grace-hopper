@@ -28,6 +28,7 @@ log() { echo "$*" | tee -a "$LOGFILE"; }
 PR_URL=""
 PR_NUMBER="${PR_NUMBER:-}"
 SESSION_ID=""
+PREV_SESSION_ID="${PREV_SESSION_ID:-}"
 
 # Map mode to the type stored in tasks.json so worker updates match
 # the initial entry the poller wrote (type="task" for new/resume tasks).
@@ -214,10 +215,6 @@ esac
 save_state running $$
 write_claude_md running
 
-# Find the most recent conversation history file for this workspace (any mode)
-WORKSPACE_SLUG="${WORKSPACE//\//-}"
-PREV_SESSION="$(ls -t "/home/agent/.claude/projects/${WORKSPACE_SLUG}"/*.jsonl 2>/dev/null | head -1 || true)"
-
 # ── Build Claude prompt (mode-specific) ───────────────────────────────────────
 
 GOAL_FILE="$(mktemp)"
@@ -253,10 +250,17 @@ GOAL
     ;;
 
 resume)
+if [[ -n "$PREV_SESSION_ID" ]]; then
+cat > "$GOAL_FILE" <<GOAL
+You are resuming issue #${ISSUE_NUMBER}: ${ISSUE_TITLE}. You were interrupted — continue from where you left off. If the work is already complete, verify tests pass and ensure everything is committed.
+
+Do NOT create a pull request — the system handles that automatically.
+Do not ask for confirmation — work autonomously to completion.
+GOAL
+else
 GIT_LOG="$(git log "${DEFAULT_BRANCH}..HEAD" --oneline 2>/dev/null || git log --oneline -10)"
 GIT_STATUS="$(git status --short)"
 GIT_DIFF_STAT="$(git diff "${DEFAULT_BRANCH}..HEAD" --stat 2>/dev/null || true)"
-
 cat > "$GOAL_FILE" <<GOAL
 You are resuming an in-progress task that was interrupted. Review what was
 already done and continue from where the previous session left off.
@@ -281,32 +285,34 @@ Uncommitted changes:
 \`\`\`
 ${GIT_STATUS:-  (working tree is clean)}
 \`\`\`
-${PREV_SESSION:+
-## Previous session history
 
-The previous session conversation is stored at:
-\`${PREV_SESSION}\`
-
-Read this file to understand what was investigated, what approaches were tried,
-and what decisions were made. The assistant entries (look for
-role:assistant and type:text content blocks) contain the
-reasoning. Use this to avoid repeating work or re-investigating dead ends.
-}
 ## Instructions
 
-1. Read the previous session history file if available — it captures the full reasoning from the last run.
-2. Read the changed files to understand what was already implemented.
-3. Determine what remains to fully resolve the issue.
-4. Continue without redoing completed work.
-5. Ensure all tests pass.
-6. Stage and commit remaining changes.
+1. Read the changed files to understand what was already implemented.
+2. Determine what remains to fully resolve the issue.
+3. Continue without redoing completed work.
+4. Ensure all tests pass.
+5. Stage and commit remaining changes.
 
 Do NOT create a pull request — the system handles that automatically.
 Do not ask for confirmation — work autonomously to completion.
 GOAL
+fi
     ;;
 
 ci-fix)
+if [[ -n "$PREV_SESSION_ID" ]]; then
+cat > "$GOAL_FILE" <<GOAL
+CI is failing on PR #${PR_NUMBER} (run ${FAILED_RUN_ID}). Fix the failures.
+
+\`\`\`
+${FAILED_LOGS}
+\`\`\`
+
+Do NOT create a new pull request — one already exists as PR #${PR_NUMBER}.
+Do not ask for confirmation — work autonomously to completion.
+GOAL
+else
 cat > "$GOAL_FILE" <<GOAL
 You are fixing a failing CI pipeline on PR #${PR_NUMBER}.
 
@@ -325,14 +331,7 @@ ${FAILED_LOGS}
     gh run view ${FAILED_RUN_ID} --repo ${REPO_NAME_WITH_OWNER} --log-failed
     gh run list --repo ${REPO_NAME_WITH_OWNER} --branch ${BRANCH}
     gh pr checks ${PR_NUMBER} --repo ${REPO_NAME_WITH_OWNER}
-${PREV_SESSION:+
-## Previous session history
 
-A prior session worked on this task. The conversation history is at:
-\`${PREV_SESSION}\`
-
-Read this file to understand what was already tried before starting work.
-}
 ## Instructions
 
 1. Read the failure logs carefully to understand what is failing and why.
@@ -343,6 +342,7 @@ Read this file to understand what was already tried before starting work.
 Do NOT create a pull request — one already exists as PR #${PR_NUMBER}.
 Do not ask for confirmation — work autonomously to completion.
 GOAL
+fi
     ;;
 esac
 
@@ -353,7 +353,8 @@ log "=== Running Claude ==="
 
 export CLAUDE_PROMPT CLAUDE_LOGFILE="$LOGFILE" \
        CLAUDE_MODEL="${CLAUDE_MODEL:-claude-sonnet-4-6}" \
-       CLAUDE_CWD="$WORKSPACE"
+       CLAUDE_CWD="$WORKSPACE" \
+       CLAUDE_RESUME_SESSION="$PREV_SESSION_ID"
 
 CLAUDE_PROMPT="$(cat "$GOAL_FILE")"
 rm -f "$GOAL_FILE"

@@ -266,7 +266,9 @@ def poll(project: dict, status_field: dict) -> None:
             action = "stale lock, resuming" if stale else "idle, resuming"
             log.info("Issue #%s — %s", issue_number, action)
             pr_branch = resolve_branch(repo_nwo, issue_number, issue_title)
-            dispatch("resume", base_env, PR_BRANCH=pr_branch)
+            task_entry = get_entry(issue_number, "task")
+            prev_session_id = (task_entry or {}).get("sessionId") or ""
+            dispatch("resume", base_env, PR_BRANCH=pr_branch, PREV_SESSION_ID=prev_session_id)
 
         # ── In Review ─────────────────────────────────────────────────────────
         elif board_status == STATUS_IN_REVIEW:
@@ -319,10 +321,17 @@ def poll(project: dict, status_field: dict) -> None:
                 "prUrl": f"https://github.com/{repo_nwo}/pull/{pr_number}",
                 "workspacePath": workspace, "failedRunId": failed_run_id,
             })
+            task_entry = get_entry(issue_number, "task")
+            prev_session_id = (
+                (ci_entry or {}).get("sessionId") or
+                (task_entry or {}).get("sessionId") or
+                ""
+            )
             dispatch("ci-fix", base_env,
                      PR_NUMBER=str(pr_number),
                      PR_BRANCH=pr_branch,
-                     FAILED_RUN_ID=failed_run_id)
+                     FAILED_RUN_ID=failed_run_id,
+                     PREV_SESSION_ID=prev_session_id)
 
 
 def main() -> None:
