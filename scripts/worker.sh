@@ -205,6 +205,10 @@ esac
 save_state running $$
 write_claude_md running
 
+# Find the most recent conversation history file for this workspace (any mode)
+WORKSPACE_SLUG="${WORKSPACE//\//-}"
+PREV_SESSION="$(ls -t "/home/agent/.claude/projects/${WORKSPACE_SLUG}"/*.jsonl 2>/dev/null | head -1 || true)"
+
 # ── Build Claude prompt (mode-specific) ───────────────────────────────────────
 
 GOAL_FILE="$(mktemp)"
@@ -243,10 +247,6 @@ resume)
 GIT_LOG="$(git log "${DEFAULT_BRANCH}..HEAD" --oneline 2>/dev/null || git log --oneline -10)"
 GIT_STATUS="$(git status --short)"
 GIT_DIFF_STAT="$(git diff "${DEFAULT_BRANCH}..HEAD" --stat 2>/dev/null || true)"
-
-# Find the most recent conversation history file for this workspace
-WORKSPACE_SLUG="${WORKSPACE//\//-}"
-PREV_SESSION="$(ls -t "/home/agent/.claude/projects/${WORKSPACE_SLUG}"/*.jsonl 2>/dev/null | head -1 || true)"
 
 cat > "$GOAL_FILE" <<GOAL
 You are resuming an in-progress task that was interrupted. Review what was
@@ -316,7 +316,14 @@ ${FAILED_LOGS}
     gh run view ${FAILED_RUN_ID} --repo ${REPO_NAME_WITH_OWNER} --log-failed
     gh run list --repo ${REPO_NAME_WITH_OWNER} --branch ${BRANCH}
     gh pr checks ${PR_NUMBER} --repo ${REPO_NAME_WITH_OWNER}
+${PREV_SESSION:+
+## Previous session history
 
+A prior session worked on this task. The conversation history is at:
+\`${PREV_SESSION}\`
+
+Read this file to understand what was already tried before starting work.
+}
 ## Instructions
 
 1. Read the failure logs carefully to understand what is failing and why.
