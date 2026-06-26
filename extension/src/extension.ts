@@ -26,6 +26,7 @@ interface Task {
     logPath?:      string;
     pid?:          number;
     failedRunId?:  string;
+    sessionId?:    string;
     skipReason?:   string;
     startedAt?:    string;
     updatedAt?:    string;
@@ -50,9 +51,13 @@ function liveStatus(task: Task): Status {
     return task.status;
 }
 
-// Returns the session ID of the most recent Claude conversation for a workspace,
-// by finding the newest .jsonl in ~/.claude/projects/<path-slug>/
-function latestSessionId(workspacePath: string): string | undefined {
+// Returns the session ID for a task. Prefers the sessionId stored in tasks.json
+// (written by run_claude.js via update_state.py); falls back to scanning the
+// newest .jsonl in ~/.claude/projects/<path-slug>/ for older tasks.
+function latestSessionId(task: Task): string | undefined {
+    if (task.sessionId) return task.sessionId;
+    const workspacePath = task.workspacePath;
+    if (!workspacePath) return undefined;
     const slug = workspacePath.replace(/\//g, '-');
     const dir  = path.join(CLAUDE_HOME, 'projects', slug);
     try {
@@ -369,12 +374,13 @@ export function activate(context: vscode.ExtensionContext): void {
 
         vscode.commands.registerCommand('graceHopper.openClaude',
             (arg: TaskNode) => {
-                const workspacePath = arg instanceof TaskNode ? arg.task.workspacePath : undefined;
-                if (!workspacePath) {
+                const task          = arg instanceof TaskNode ? arg.task : undefined;
+                const workspacePath = task?.workspacePath;
+                if (!workspacePath || !task) {
                     vscode.window.showErrorMessage('No workspace path for this task');
                     return;
                 }
-                const sessionId = latestSessionId(workspacePath);
+                const sessionId = latestSessionId(task);
                 // Persist the session intent so activate() can open the terminal
                 // after the window reloads into the new workspace folder.
                 fs.writeFileSync(PENDING_CLAUDE, JSON.stringify({ workspacePath, sessionId }));

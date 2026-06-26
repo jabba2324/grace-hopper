@@ -5,7 +5,7 @@ CLI wrapper around state.upsert().  Called from shell scripts via env vars.
 Required: TASK_ISSUE_NUMBER, TASK_TYPE, TASK_STATUS
 Optional: TASK_TITLE, TASK_REPO, TASK_BRANCH, TASK_WORKSPACE,
           TASK_LOG, TASK_PID, TASK_PR_URL, TASK_PR_NUMBER,
-          TASK_PR_BRANCH, TASK_FAILED_RUN_ID
+          TASK_PR_BRANCH, TASK_FAILED_RUN_ID, TASK_SESSION_ID
 """
 import os
 import sys
@@ -34,6 +34,7 @@ entry: dict = {
     "prUrl":         e("TASK_PR_URL"),
     "prNumber":      int(e("TASK_PR_NUMBER")) if e("TASK_PR_NUMBER") else None,
     "failedRunId":   e("TASK_FAILED_RUN_ID"),
+    "sessionId":     e("TASK_SESSION_ID"),
 }
 
 state.upsert(entry)
