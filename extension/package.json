@@ -60,22 +60,42 @@
         "command": "graceHopper.openClaude",
         "title": "Open Claude",
         "icon": "$(sparkle)"
+      },
+      {
+        "command": "graceHopper.addRepo",
+        "title": "Add Repository",
+        "icon": "$(add)"
+      },
+      {
+        "command": "graceHopper.removeRepo",
+        "title": "Remove Repository",
+        "icon": "$(remove)"
       }
     ],
     "menus": {
       "view/title": [
         {
-          "command": "graceHopper.rebuildState",
+          "command": "graceHopper.addRepo",
           "when": "view == graceHopper",
           "group": "navigation@1"
         },
         {
-          "command": "graceHopper.refresh",
+          "command": "graceHopper.rebuildState",
           "when": "view == graceHopper",
           "group": "navigation@2"
+        },
+        {
+          "command": "graceHopper.refresh",
+          "when": "view == graceHopper",
+          "group": "navigation@3"
         }
       ],
       "view/item/context": [
+        {
+          "command": "graceHopper.removeRepo",
+          "when": "view == graceHopper && viewItem == repo",
+          "group": "inline@1"
+        },
         {
           "command": "graceHopper.pauseTask",
           "when": "view == graceHopper && viewItem == runningTask",

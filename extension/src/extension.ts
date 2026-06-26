@@ -3,57 +3,58 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as cp from 'child_process';
 
-const STATE_DIR          = '/app/state';
-const TASKS_FILE         = path.join(STATE_DIR, 'tasks.json');
-const LOCK_DIR           = path.join(STATE_DIR, 'active');
-const CLAUDE_HOME        = '/home/agent/.claude';
-const PENDING_CLAUDE     = path.join(STATE_DIR, 'pending-claude.json');
+const STATE_DIR      = '/app/state';
+const TASKS_FILE     = path.join(STATE_DIR, 'tasks.json');
+const REPOS_FILE     = path.join(STATE_DIR, 'repos.json');
+const LOCK_DIR       = path.join(STATE_DIR, 'active');
+const CLAUDE_HOME    = '/home/agent/.claude';
+const PENDING_CLAUDE = path.join(STATE_DIR, 'pending-claude.json');
 
 type Status   = 'running' | 'dispatched' | 'stale' | 'completed' | 'failed' | 'paused' | 'unknown';
 type TaskType = 'task' | 'resume' | 'ci-fix';
 
 interface Task {
-    issueNumber:   number;
-    prNumber?:     number;
-    type:          TaskType;
-    status:        Status;
-    title:         string;
-    repo:          string;
-    branch?:       string;
-    issueUrl?:     string;
-    prUrl?:        string;
+    issueNumber:    number;
+    prNumber?:      number;
+    type:           TaskType;
+    status:         Status;
+    title:          string;
+    repo:           string;
+    branch?:        string;
+    issueUrl?:      string;
+    prUrl?:         string;
     workspacePath?: string;
-    logPath?:      string;
-    pid?:          number;
-    failedRunId?:  string;
-    sessionId?:    string;
-    skipReason?:   string;
-    startedAt?:    string;
-    updatedAt?:    string;
+    logPath?:       string;
+    pid?:           number;
+    failedRunId?:   string;
+    sessionId?:     string;
+    skipReason?:    string;
+    startedAt?:     string;
+    updatedAt?:     string;
+}
+
+interface RepoConfig {
+    repo:               string;
+    projectNumber:      number;
+    statusTodo?:        string;
+    statusInProgress?:  string;
+    statusInReview?:    string;
 }
 
 let out: vscode.OutputChannel;
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
 function lockExists(issueNumber: number): boolean {
     return fs.existsSync(path.join(LOCK_DIR, `issue-${issueNumber}.lock`));
 }
 
 function liveStatus(task: Task): Status {
-    // Use lock file existence — PIDs are from the agent container and can't
-    // be checked from code-server (different PID namespace).
     if (lockExists(task.issueNumber)) { return 'running'; }
-    // Only mark stale if the task was actively running; dispatched just means
-    // the poller sent it but save_state hasn't updated yet — leave it as-is
-    // so it doesn't fight against a 'completed' entry in the merge.
     if (task.status === 'running') { return 'stale'; }
     return task.status;
 }
 
-// Returns the session ID for a task. Prefers the sessionId stored in tasks.json
-// (written by run_claude.js via update_state.py); falls back to scanning the
-// newest .jsonl in ~/.claude/projects/<path-slug>/ for older tasks.
 function latestSessionId(task: Task): string | undefined {
     if (task.sessionId) return task.sessionId;
     const workspacePath = task.workspacePath;
@@ -77,14 +78,37 @@ function getCurrentBranch(workspacePath: string): string | null {
     } catch { return null; }
 }
 
+// ── Config ────────────────────────────────────────────────────────────────────
+
+function readReposFile(): RepoConfig[] {
+    try {
+        if (fs.existsSync(REPOS_FILE)) {
+            return JSON.parse(fs.readFileSync(REPOS_FILE, 'utf8')) as RepoConfig[];
+        }
+    } catch { }
+    return [];
+}
+
+function loadRepos(): RepoConfig[] {
+    const fromFile = readReposFile();
+    if (fromFile.length > 0) return fromFile;
+    // Fall back to env vars for single-repo setups that haven't migrated
+    const repo = process.env['GITHUB_REPO'];
+    const num  = process.env['GITHUB_PROJECT_NUMBER'];
+    if (repo && num) {
+        return [{ repo, projectNumber: parseInt(num, 10) }];
+    }
+    return [];
+}
+
 // ── Load tasks ────────────────────────────────────────────────────────────────
 
 const STATUS_ORDER: Record<Status, number> = {
     running:    0,
     failed:     1,
     paused:     2,
-    completed:  3,  // completed beats stale — a finished ci-fix should win
-    stale:      4,  // stale task entry shouldn't override completed ci-fix
+    completed:  3,
+    stale:      4,
     dispatched: 5,
     unknown:    6,
 };
@@ -106,14 +130,12 @@ function mergeByIssue(tasks: Task[]): Task[] {
         if (!existing) {
             byIssue.set(t.issueNumber, { ...t });
         } else {
-            // Merge: keep best status, accumulate non-null fields
             const merged: Task = { ...existing };
             for (const [k, v] of Object.entries(t) as [keyof Task, unknown][]) {
                 if (v != null && !merged[k]) { (merged as unknown as Record<string, unknown>)[k] = v; }
             }
             merged.status = STATUS_ORDER[t.status] < STATUS_ORDER[existing.status]
                 ? t.status : existing.status;
-            // Always prefer the most informative title (non-generic)
             if (t.title && !t.title.startsWith('CI fix')) { merged.title = t.title; }
             byIssue.set(t.issueNumber, merged);
         }
@@ -143,14 +165,25 @@ function loadTasks(): Task[] {
 
 // ── Tree nodes ────────────────────────────────────────────────────────────────
 
-type Node = TaskNode | DetailNode;
+type Node = RepoNode | TaskNode | DetailNode;
+
+class RepoNode extends vscode.TreeItem {
+    constructor(
+        public readonly config: RepoConfig,
+        public readonly tasks: Task[],
+    ) {
+        super(config.repo, vscode.TreeItemCollapsibleState.Expanded);
+        this.description  = `project #${config.projectNumber} · ${tasks.length} task${tasks.length !== 1 ? 's' : ''}`;
+        this.tooltip      = `${config.repo}\nProject #${config.projectNumber}`;
+        this.contextValue = 'repo';
+    }
+}
 
 class TaskNode extends vscode.TreeItem {
     constructor(public readonly task: Task) {
         super(task.title, vscode.TreeItemCollapsibleState.Collapsed);
         this.description  = STATUS_LABEL[task.status];
         this.tooltip      = `${task.title}\n${task.repo} · ${task.type}`;
-        // contextValue drives the inline button visibility in package.json menus
         this.contextValue = task.status === 'running' ? 'runningTask'
                           : task.status === 'paused'  ? 'pausedTask'
                           : task.status === 'failed'  ? 'failedTask'
@@ -244,10 +277,12 @@ function buildDetails(task: Task): DetailNode[] {
 class GraceHopperProvider implements vscode.TreeDataProvider<Node> {
     private readonly _onChange = new vscode.EventEmitter<void>();
     readonly onDidChangeTreeData = this._onChange.event;
-    private cache: Task[] = [];
+    private repos: RepoConfig[] = [];
+    private tasks: Task[] = [];
 
     refresh(): void {
-        this.cache = loadTasks();
+        this.repos = loadRepos();
+        this.tasks = loadTasks();
         this._onChange.fire();
     }
 
@@ -255,10 +290,18 @@ class GraceHopperProvider implements vscode.TreeDataProvider<Node> {
 
     getChildren(element?: Node): Node[] {
         if (!element) {
-            if (this.cache.length === 0) {
-                return [new DetailNode('No tasks yet', STATE_DIR)];
+            if (this.repos.length === 0) {
+                return [new DetailNode('No repositories configured', 'click + to add one')];
             }
-            return this.cache.map(t => new TaskNode(t));
+            return this.repos.map(cfg =>
+                new RepoNode(cfg, this.tasks.filter(t => t.repo === cfg.repo))
+            );
+        }
+        if (element instanceof RepoNode) {
+            if (element.tasks.length === 0) {
+                return [new DetailNode('No tasks yet', 'waiting for issues…')];
+            }
+            return element.tasks.map(t => new TaskNode(t));
         }
         if (element instanceof TaskNode) {
             return buildDetails(element.task);
@@ -272,7 +315,6 @@ class GraceHopperProvider implements vscode.TreeDataProvider<Node> {
 export function activate(context: vscode.ExtensionContext): void {
     out = vscode.window.createOutputChannel('Grace Hopper');
     out.appendLine(`Activated — tasks file: ${TASKS_FILE}`);
-    out.appendLine(`tasks.json exists: ${fs.existsSync(TASKS_FILE)}`);
 
     // Open a Claude terminal if a session was queued before a workspace reload
     if (fs.existsSync(PENDING_CLAUDE)) {
@@ -296,7 +338,47 @@ export function activate(context: vscode.ExtensionContext): void {
     context.subscriptions.push(
         out,
         vscode.window.registerTreeDataProvider('graceHopper', provider),
+
         vscode.commands.registerCommand('graceHopper.refresh', () => provider.refresh()),
+
+        vscode.commands.registerCommand('graceHopper.addRepo', async () => {
+            const repo = await vscode.window.showInputBox({
+                prompt:       'GitHub repository to monitor',
+                placeHolder:  'owner/repo',
+                validateInput: v => (v ?? '').includes('/') ? null : 'Must be in owner/repo format',
+            });
+            if (!repo) { return; }
+
+            const numStr = await vscode.window.showInputBox({
+                prompt:       'GitHub Projects v2 board number (visible in the project URL)',
+                placeHolder:  '1',
+                validateInput: v => /^\d+$/.test(v ?? '') ? null : 'Must be a number',
+            });
+            if (!numStr) { return; }
+
+            // Seed from env-var repo so we don't silently drop existing single-repo setup
+            const existing = readReposFile();
+            if (existing.length === 0) {
+                const envRepo = process.env['GITHUB_REPO'];
+                const envNum  = process.env['GITHUB_PROJECT_NUMBER'];
+                if (envRepo && envNum && envRepo !== repo) {
+                    existing.push({ repo: envRepo, projectNumber: parseInt(envNum, 10) });
+                }
+            }
+            const repos = existing.filter(r => r.repo !== repo);
+            repos.push({ repo, projectNumber: parseInt(numStr, 10) });
+            fs.writeFileSync(REPOS_FILE, JSON.stringify(repos, null, 2));
+            provider.refresh();
+            vscode.window.showInformationMessage(`Now monitoring ${repo} (project #${numStr})`);
+        }),
+
+        vscode.commands.registerCommand('graceHopper.removeRepo', (node: RepoNode) => {
+            const repo  = node.config.repo;
+            const repos = readReposFile().filter(r => r.repo !== repo);
+            fs.writeFileSync(REPOS_FILE, JSON.stringify(repos, null, 2));
+            provider.refresh();
+            vscode.window.showInformationMessage(`Stopped monitoring ${repo}`);
+        }),
 
         vscode.commands.registerCommand('graceHopper.rebuildState', () => {
             vscode.window.withProgress(
@@ -305,7 +387,7 @@ export function activate(context: vscode.ExtensionContext): void {
                     try {
                         const result = cp.execSync('python3 /app/scripts/rebuild_state.py', {
                             encoding: 'utf8',
-                            env: { ...process.env, GH_TOKEN: process.env.GITHUB_TOKEN ?? '' },
+                            env: { ...process.env, GH_TOKEN: process.env['GITHUB_TOKEN'] ?? '' },
                             timeout: 30_000,
                         });
                         const { fixed } = JSON.parse(result.trim() || '{"fixed":[]}') as { fixed: string[] };
@@ -322,6 +404,7 @@ export function activate(context: vscode.ExtensionContext): void {
                 })
             );
         }),
+
         vscode.commands.registerCommand('graceHopper.openWorkspace', (wsPath: string) => {
             vscode.commands.executeCommand(
                 'vscode.openFolder', vscode.Uri.file(wsPath), { forceNewWindow: false },
@@ -381,32 +464,33 @@ export function activate(context: vscode.ExtensionContext): void {
                     return;
                 }
                 const sessionId = latestSessionId(task);
-                // Persist the session intent so activate() can open the terminal
-                // after the window reloads into the new workspace folder.
                 fs.writeFileSync(PENDING_CLAUDE, JSON.stringify({ workspacePath, sessionId }));
                 vscode.commands.executeCommand(
                     'vscode.openFolder', vscode.Uri.file(workspacePath), { forceNewWindow: false }
                 );
             }),
-
     );
 
     try {
-        // Watch tasks.json for content changes
         const tasksWatcher = vscode.workspace.createFileSystemWatcher(
             new vscode.RelativePattern(vscode.Uri.file(STATE_DIR), 'tasks.json'),
         );
         tasksWatcher.onDidChange(() => provider.refresh());
         tasksWatcher.onDidCreate(() => provider.refresh());
 
-        // Watch lock files so running/stale status flips immediately
+        const reposWatcher = vscode.workspace.createFileSystemWatcher(
+            new vscode.RelativePattern(vscode.Uri.file(STATE_DIR), 'repos.json'),
+        );
+        reposWatcher.onDidChange(() => provider.refresh());
+        reposWatcher.onDidCreate(() => provider.refresh());
+
         const lockWatcher = vscode.workspace.createFileSystemWatcher(
             new vscode.RelativePattern(vscode.Uri.file(path.join(STATE_DIR, 'active')), '*.lock'),
         );
         lockWatcher.onDidCreate(() => provider.refresh());
         lockWatcher.onDidDelete(() => provider.refresh());
 
-        context.subscriptions.push(tasksWatcher, lockWatcher);
+        context.subscriptions.push(tasksWatcher, reposWatcher, lockWatcher);
     } catch (e) { out.appendLine(`Watcher error: ${e}`); }
 
     const timer = setInterval(() => provider.refresh(), 2_000);

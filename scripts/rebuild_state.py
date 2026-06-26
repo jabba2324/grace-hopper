@@ -19,17 +19,33 @@ from pathlib import Path
 sys.path.insert(0, "/app/scripts")
 import state as task_state
 
-GH_TOKEN       = os.environ.get("GITHUB_TOKEN", "")
-GITHUB_REPO    = os.environ.get("GITHUB_REPO", "")
-PROJECT_NUMBER = int(os.environ.get("GITHUB_PROJECT_NUMBER", "0"))
-STATE_DIR      = Path("/app/state")
-LOCK_DIR       = STATE_DIR / "active"
-
-STATUS_IN_PROGRESS = os.environ.get("PROJECT_STATUS_IN_PROGRESS", "In Progress")
-STATUS_IN_REVIEW   = os.environ.get("PROJECT_STATUS_IN_REVIEW",   "In Review")
-STATUS_TODO        = os.environ.get("PROJECT_STATUS_TODO",         "Todo")
+GH_TOKEN  = os.environ.get("GITHUB_TOKEN", "")
+STATE_DIR = Path("/app/state")
+LOCK_DIR  = STATE_DIR / "active"
+CONFIG_FILE = STATE_DIR / "repos.json"
 
 GH_ENV = {**os.environ, "GH_TOKEN": GH_TOKEN}
+
+
+def load_config() -> list[dict]:
+    try:
+        if CONFIG_FILE.exists():
+            repos = json.loads(CONFIG_FILE.read_text())
+            if repos:
+                return repos
+    except Exception:
+        pass
+    repo        = os.environ.get("GITHUB_REPO", "")
+    project_num = os.environ.get("GITHUB_PROJECT_NUMBER", "")
+    if repo and project_num:
+        return [{
+            "repo":             repo,
+            "projectNumber":    int(project_num),
+            "statusTodo":       os.environ.get("PROJECT_STATUS_TODO",        "Todo"),
+            "statusInProgress": os.environ.get("PROJECT_STATUS_IN_PROGRESS", "In Progress"),
+            "statusInReview":   os.environ.get("PROJECT_STATUS_IN_REVIEW",   "In Review"),
+        }]
+    return []
 
 
 def gh(*args: str) -> str:
@@ -70,8 +86,8 @@ def get_failing_run(repo_nwo: str, branch: str) -> str | None:
     return str(runs[0]["databaseId"]) if runs else None
 
 
-def fetch_board() -> list[dict]:
-    owner, repo = GITHUB_REPO.split("/", 1)
+def fetch_board(repo_nwo: str, project_number: int) -> list[dict]:
+    owner, repo = repo_nwo.split("/", 1)
     query = """
     query($owner:String!,$repo:String!,$number:Int!){
       repository(owner:$owner,name:$repo){
@@ -101,11 +117,15 @@ def fetch_board() -> list[dict]:
              "-f", f"query={query}",
              "-f", f"owner={owner}",
              "-f", f"repo={repo}",
-             "-F", f"number={PROJECT_NUMBER}")
+             "-F", f"number={project_number}")
     if not raw:
         return []
     data = json.loads(raw)
-    return data.get("data", {}).get("repository", {}).get("projectV2", {}).get("items", {}).get("nodes", [])
+    return (data.get("data", {})
+                .get("repository", {})
+                .get("projectV2", {})
+                .get("items", {})
+                .get("nodes", []))
 
 
 def board_status(item: dict) -> str | None:
@@ -115,10 +135,14 @@ def board_status(item: dict) -> str | None:
     return None
 
 
-def main() -> None:
-    fixed = []
-    items = fetch_board()
+def rebuild_one(cfg: dict, fixed: list[str]) -> None:
+    repo_nwo       = cfg["repo"]
+    project_number = int(cfg["projectNumber"])
+    status_in_progress = cfg.get("statusInProgress", "In Progress")
+    status_in_review   = cfg.get("statusInReview",   "In Review")
+    status_todo        = cfg.get("statusTodo",        "Todo")
 
+    items = fetch_board(repo_nwo, project_number)
     for item in items:
         content = item.get("content") or {}
         if not content:
@@ -126,35 +150,33 @@ def main() -> None:
 
         issue_number = content["number"]
         issue_title  = content["title"]
-        repo_nwo     = content["repository"]["nameWithOwner"]
-        repo_name    = repo_nwo.split("/")[-1]
+        item_repo    = content["repository"]["nameWithOwner"]
+        repo_name    = item_repo.split("/")[-1]
         workspace    = f"/workspaces/{repo_name}-{issue_number}"
         col          = board_status(item)
 
-        # Derive correct status from live signals
         if is_active(issue_number):
             correct_status = "running"
-        elif col == STATUS_IN_REVIEW:
-            pr = find_pr(repo_nwo, issue_number)
+        elif col == status_in_review:
+            pr = find_pr(item_repo, issue_number)
             if pr:
-                failing = get_failing_run(repo_nwo, pr["headRefName"])
+                failing = get_failing_run(item_repo, pr["headRefName"])
                 correct_status = "dispatched" if failing else "completed"
             else:
                 correct_status = "completed"
-        elif col == STATUS_IN_PROGRESS:
-            correct_status = "failed"   # in progress but nothing running
+        elif col == status_in_progress:
+            correct_status = "failed"
         else:
-            correct_status = "dispatched" if col == STATUS_TODO else "completed"
+            correct_status = "dispatched" if col == status_todo else "completed"
 
-        pr = find_pr(repo_nwo, issue_number)
-
+        pr = find_pr(item_repo, issue_number)
         entry: dict = {
-            "issueNumber": issue_number,
-            "type":        "task",
-            "status":      correct_status,
-            "title":       issue_title,
-            "repo":        repo_nwo,
-            "issueUrl":    f"https://github.com/{repo_nwo}/issues/{issue_number}",
+            "issueNumber":   issue_number,
+            "type":          "task",
+            "status":        correct_status,
+            "title":         issue_title,
+            "repo":          item_repo,
+            "issueUrl":      f"https://github.com/{item_repo}/issues/{issue_number}",
             "workspacePath": workspace,
         }
         if pr:
@@ -164,7 +186,6 @@ def main() -> None:
 
         existing = task_state.get_entry(issue_number)
         if existing:
-            # Preserve logPath if we already have it
             if existing.get("logPath"):
                 entry["logPath"] = existing["logPath"]
             if existing.get("status") != correct_status:
@@ -172,6 +193,14 @@ def main() -> None:
 
         task_state.upsert(entry)
 
+
+def main() -> None:
+    fixed: list[str] = []
+    for cfg in load_config():
+        try:
+            rebuild_one(cfg, fixed)
+        except Exception as exc:
+            fixed.append(f"Error rebuilding {cfg.get('repo', '?')}: {exc}")
     print(json.dumps({"fixed": fixed}))
 
 

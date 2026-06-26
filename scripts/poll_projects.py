@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """
 Single polling loop. Handles all board states (Todo / In Progress / In Review)
-in one pass. All state is tracked in state/tasks.json — no separate
-dispatched.json or ci_dispatched.json.
+in one pass for every configured repository. All state is tracked in
+state/tasks.json. Repository config is read from state/repos.json (managed
+via the VS Code extension), falling back to GITHUB_REPO + GITHUB_PROJECT_NUMBER
+env vars for single-repo setups.
 """
 import json
 import logging
@@ -24,15 +26,10 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-_GITHUB_REPO      = os.environ["GITHUB_REPO"]
-REPO_OWNER, REPO_NAME = _GITHUB_REPO.split("/", 1)
-PROJECT_NUMBER    = int(os.environ["GITHUB_PROJECT_NUMBER"])
-STATUS_TODO       = os.environ.get("PROJECT_STATUS_TODO", "Todo")
-STATUS_IN_PROGRESS = os.environ.get("PROJECT_STATUS_IN_PROGRESS", "In Progress")
-STATUS_IN_REVIEW  = os.environ.get("PROJECT_STATUS_IN_REVIEW", "In Review")
-POLL_INTERVAL     = int(os.environ.get("POLL_INTERVAL", "5"))
-STATE_DIR         = Path("/app/state")
-LOCK_DIR          = STATE_DIR / "active"
+POLL_INTERVAL = int(os.environ.get("POLL_INTERVAL", "5"))
+STATE_DIR     = Path("/app/state")
+LOCK_DIR      = STATE_DIR / "active"
+CONFIG_FILE   = STATE_DIR / "repos.json"
 
 
 GET_PROJECT = """
@@ -78,6 +75,34 @@ mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
 """
 
 
+# ── Config ────────────────────────────────────────────────────────────────────
+
+def load_config() -> list[dict]:
+    """
+    Load repo+project config from repos.json. Falls back to env vars so
+    single-repo setups that haven't migrated to repos.json keep working.
+    """
+    try:
+        if CONFIG_FILE.exists():
+            repos = json.loads(CONFIG_FILE.read_text())
+            if repos:
+                return repos
+    except Exception as exc:
+        log.warning("Failed to read repos.json: %s", exc)
+
+    repo        = os.environ.get("GITHUB_REPO", "")
+    project_num = os.environ.get("GITHUB_PROJECT_NUMBER", "")
+    if repo and project_num:
+        return [{
+            "repo":              repo,
+            "projectNumber":     int(project_num),
+            "statusTodo":        os.environ.get("PROJECT_STATUS_TODO",        "Todo"),
+            "statusInProgress":  os.environ.get("PROJECT_STATUS_IN_PROGRESS", "In Progress"),
+            "statusInReview":    os.environ.get("PROJECT_STATUS_IN_REVIEW",   "In Review"),
+        }]
+    return []
+
+
 # ── State helpers ─────────────────────────────────────────────────────────────
 
 def _write_state(entry: dict) -> None:
@@ -120,6 +145,8 @@ def item_status(item: dict) -> str | None:
             return fv.get("name")
     return None
 
+
+# ── Per-repo batch fetchers ───────────────────────────────────────────────────
 
 def _fetch_open_prs(repo_nwo: str) -> list[dict]:
     """All open PRs for the repo — fetched once per poll cycle."""
@@ -170,15 +197,16 @@ def dispatch(mode: str, base_env: dict, **extra: str) -> None:
 
 # ── Main poll ─────────────────────────────────────────────────────────────────
 
-def poll(project: dict, status_field: dict) -> None:
+def poll(project: dict, status_field: dict,
+         status_todo: str, status_in_progress: str, status_in_review: str) -> None:
     project_id      = project["id"]
     status_field_id = status_field["id"]
     options         = {opt["name"]: opt["id"] for opt in status_field["options"]}
 
-    in_progress_id = options.get(STATUS_IN_PROGRESS)
-    in_review_id   = options.get(STATUS_IN_REVIEW)
+    in_progress_id = options.get(status_in_progress)
+    in_review_id   = options.get(status_in_review)
     if not in_progress_id:
-        log.warning("Status option %r not found", STATUS_IN_PROGRESS)
+        log.warning("Status option %r not found", status_in_progress)
         return
 
     items = project["items"]["nodes"]
@@ -188,7 +216,7 @@ def poll(project: dict, status_field: dict) -> None:
     active_repos: set[str] = set()
     for item in items:
         content = item.get("content") or {}
-        if content and item_status(item) in (STATUS_IN_PROGRESS, STATUS_IN_REVIEW):
+        if content and item_status(item) in (status_in_progress, status_in_review):
             active_repos.add(content["repository"]["nameWithOwner"])
 
     open_prs:       dict[str, list[dict]]     = {r: _fetch_open_prs(r)       for r in active_repos}
@@ -221,7 +249,7 @@ def poll(project: dict, status_field: dict) -> None:
         }
 
         # ── Todo ──────────────────────────────────────────────────────────────
-        if board_status == STATUS_TODO:
+        if board_status == status_todo:
             entry = get_entry(issue_number, "task")
             if entry and entry.get("status") not in ("failed",):
                 log.debug("Issue #%s — already dispatched (%s)", issue_number, entry.get("status"))
@@ -243,8 +271,7 @@ def poll(project: dict, status_field: dict) -> None:
             dispatch("new", base_env)
 
         # ── In Progress ───────────────────────────────────────────────────────
-        elif board_status == STATUS_IN_PROGRESS:
-            # Check any entry type for paused/failed — don't auto-resume
+        elif board_status == status_in_progress:
             any_entry = get_entry(issue_number, "task") or get_entry(issue_number, "ci-fix")
             if any_entry:
                 entry_status = any_entry.get("status")
@@ -277,7 +304,7 @@ def poll(project: dict, status_field: dict) -> None:
             dispatch("resume", base_env, PR_BRANCH=pr_branch, PREV_SESSION_ID=prev_session_id)
 
         # ── In Review ─────────────────────────────────────────────────────────
-        elif board_status == STATUS_IN_REVIEW:
+        elif board_status == status_in_review:
             pr = next(
                 (p for p in open_prs.get(repo_nwo, [])
                  if p["headRefName"].startswith(f"issue/{issue_number}/")),
@@ -344,24 +371,37 @@ def poll(project: dict, status_field: dict) -> None:
 
 
 def main() -> None:
-    log.info("Watching project #%s on %s/%s — polling every %ss",
-             PROJECT_NUMBER, REPO_OWNER, REPO_NAME, POLL_INTERVAL)
+    log.info("Grace Hopper starting — polling every %ss", POLL_INTERVAL)
     while True:
-        try:
-            data = gql(GET_PROJECT, {"owner": REPO_OWNER, "repo": REPO_NAME,
-                                      "number": PROJECT_NUMBER})
-            project = data["repository"]["projectV2"]
-            status_field = next(
-                (f for f in project["fields"]["nodes"]
-                 if isinstance(f, dict) and f.get("name") == "Status"),
-                None,
+        configs = load_config()
+        if not configs:
+            log.warning(
+                "No repositories configured. Add repos via the VS Code extension "
+                "or set GITHUB_REPO + GITHUB_PROJECT_NUMBER env vars."
             )
-            if not status_field:
-                log.warning("No 'Status' field found in project")
-            else:
-                poll(project, status_field)
-        except Exception as exc:
-            log.error("Poll error: %s", exc)
+        for cfg in configs:
+            try:
+                repo_nwo       = cfg["repo"]
+                owner, repo    = repo_nwo.split("/", 1)
+                project_number = int(cfg["projectNumber"])
+                status_todo         = cfg.get("statusTodo",        "Todo")
+                status_in_progress  = cfg.get("statusInProgress",  "In Progress")
+                status_in_review    = cfg.get("statusInReview",    "In Review")
+
+                data = gql(GET_PROJECT, {"owner": owner, "repo": repo, "number": project_number})
+                project = data["repository"]["projectV2"]
+                status_field = next(
+                    (f for f in project["fields"]["nodes"]
+                     if isinstance(f, dict) and f.get("name") == "Status"),
+                    None,
+                )
+                if not status_field:
+                    log.warning("No 'Status' field in %s project #%s", repo_nwo, project_number)
+                    continue
+                log.info("── %s project #%s ──", repo_nwo, project_number)
+                poll(project, status_field, status_todo, status_in_progress, status_in_review)
+            except Exception as exc:
+                log.error("Error polling %s: %s", cfg.get("repo", "?"), exc)
         time.sleep(POLL_INTERVAL)
 
 
