@@ -121,15 +121,30 @@ The Grace Hopper VS Code extension is automatically installed in code-server and
 - Per-task details: ticket link, branch, PR link, workspace path, log file
 
 **Inline controls on each task row:**
-- **Pause** (running tasks) — gracefully stops the Claude process; task can be resumed
-- **Resume** (paused or failed tasks) — re-dispatches the task from where it left off
+- **Pause** (running tasks) — gracefully stops the Claude process; task can be resumed by the agent or a developer
+- **Resume** (paused or failed tasks) — re-dispatches the task to the agent on the next poll
 - **Tail Logs** — opens a live log stream for that task in an output panel
+- **✦ (Claude)** (non-running tasks) — opens the workspace folder in VS Code and starts an interactive Claude Code session, resuming the agent's last conversation where possible
 
 **Panel toolbar:**
 - **Rebuild State** — reconciles `tasks.json` against the live GitHub board, correcting any stale or mismatched statuses
 - **Refresh** — manually re-reads `tasks.json`
 
 The panel auto-refreshes every 5 seconds and watches for lock file changes so running/stale status updates appear immediately.
+
+## Human handoff
+
+A developer can take over any paused or failed task directly from the Grace Hopper panel.
+
+Clicking ✦ on a task:
+1. Reloads VS Code into the task's workspace folder
+2. Opens a terminal with `claude --resume <session-id>` if prior conversation history exists, or plain `claude` for a fresh session
+
+Either way, Claude reads `.claude/CLAUDE.md` from the workspace root — a file Grace writes at the start and end of every task run containing the original issue goal, current branch and PR link, all commits on the branch, files changed, and uncommitted work. This gives Claude full context without needing to replay conversation history.
+
+**Conversation history** is persisted to `./claude-home/` on the host (a bind mount of `~/.claude` shared between the agent and code-server containers). The agent and code-server share the same Claude state — settings, preferences, and per-workspace session files — so history written by an agent run is readable from a developer session in the browser and vice versa.
+
+Note: the agent runs Claude in non-interactive `-p` mode, which doesn't create sessions resumable via `--resume`. The ✦ button passes the session ID directly, bypassing the interactive picker, but the conversation content may be limited to the prompt context rather than full turn history. The `.claude/CLAUDE.md` file is the reliable handoff mechanism.
 
 ## Ponytail integration
 
@@ -165,6 +180,7 @@ State in `./state/`:
 | `tasks.json` | Single source of truth — status for every task, updated by the poller and worker |
 | `active/issue-<N>.lock` | Lock file written while a worker is running; used to detect live vs. stale processes |
 | `logs/` | Per-task log files |
+| `pending-claude.json` | Transient — written by the ✦ button before a workspace reload, consumed by the extension on re-activation to open the Claude terminal |
 
 ## Repository layout
 
@@ -184,7 +200,10 @@ State in `./state/`:
 │   └── rebuild_state.py        # Reconciles tasks.json against live GitHub board (used by VS Code extension)
 ├── extension/                  # Grace Hopper VS Code extension (auto-installed in code-server)
 ├── workspaces/                 # Cloned repositories (Docker volume, gitignored)
-└── state/                      # Task state, logs, lockfiles (Docker volume, gitignored)
+├── state/                      # Task state, logs, lockfiles (Docker volume, gitignored)
+└── claude-home/                # Shared ~/.claude for agent + code-server (bind mount, gitignored)
+                                #   Persists Claude settings, preferences, and per-workspace
+                                #   conversation history across container restarts and rebuilds.
 ```
 
 ## Stopping the agent
@@ -193,4 +212,4 @@ State in `./state/`:
 docker compose down
 ```
 
-Workspaces and state are preserved in `./workspaces` and `./state` on the host.
+Workspaces, state, and Claude conversation history are preserved in `./workspaces`, `./state`, and `./claude-home` on the host.
