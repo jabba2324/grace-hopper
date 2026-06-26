@@ -33,6 +33,11 @@
         "icon": "$(refresh)"
       },
       {
+        "command": "graceHopper.rebuildState",
+        "title": "Rebuild State",
+        "icon": "$(debug-restart)"
+      },
+      {
         "command": "graceHopper.openWorkspace",
         "title": "Open Workspace Folder"
       },
@@ -55,9 +60,14 @@
     "menus": {
       "view/title": [
         {
+          "command": "graceHopper.rebuildState",
+          "when": "view == graceHopper",
+          "group": "navigation@1"
+        },
+        {
           "command": "graceHopper.refresh",
           "when": "view == graceHopper",
-          "group": "navigation"
+          "group": "navigation@2"
         }
       ],
       "view/item/context": [
