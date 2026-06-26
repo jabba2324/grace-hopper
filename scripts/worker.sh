@@ -369,8 +369,8 @@ node /app/scripts/run_claude.js &
 NODE_PID=$!
 tail -f "$LOGFILE" --pid="$NODE_PID" &
 
-wait "$NODE_PID"
-RUNNER_EXIT=$?
+RUNNER_EXIT=0
+wait "$NODE_PID" || RUNNER_EXIT=$?
 
 SESSION_ID="$(cat "$SESSION_FILE" 2>/dev/null || true)"
 rm -f "$SESSION_FILE"
