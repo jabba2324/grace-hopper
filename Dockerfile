@@ -45,8 +45,8 @@ RUN chmod +x /app/scripts/*.sh /app/scripts/*.py
 
 COPY extension/ /app/extension/
 
-RUN mkdir -p /workspaces /app/state \
-    && chown -R agent:agent /workspaces /app/state /app/scripts /app/extension
+RUN mkdir -p /workspaces /app/state /home/agent/.claude \
+    && chown -R agent:agent /workspaces /app/state /app/scripts /app/extension /home/agent/.claude
 
 USER agent
 WORKDIR /workspaces
