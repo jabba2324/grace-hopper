@@ -347,7 +347,7 @@ export function activate(context: vscode.ExtensionContext): void {
                     location: vscode.TerminalLocation.Panel,
                     cwd: workspacePath,
                 });
-                terminal.sendText('claude --dangerously-skip-permissions --resume');
+                terminal.sendText('claude --dangerously-skip-permissions');
                 terminal.show();
             }),
 
