@@ -238,14 +238,15 @@ def poll(project: dict, status_field: dict,
         workspace     = f"/workspaces/{repo_name}-{issue_number}"
 
         base_env = {
-            "REPO_NAME_WITH_OWNER": repo_nwo,
-            "ISSUE_NUMBER":         str(issue_number),
-            "ISSUE_TITLE":          issue_title,
-            "ISSUE_BODY":           issue_body,
-            "ISSUE_URL":            issue_url,
-            "PROJECT_ID":           project_id,
-            "ITEM_ID":              item["id"],
-            "STATUS_FIELD_ID":      status_field_id,
+            "REPO_NAME_WITH_OWNER":    repo_nwo,
+            "ISSUE_NUMBER":            str(issue_number),
+            "ISSUE_TITLE":             issue_title,
+            "ISSUE_BODY":              issue_body,
+            "ISSUE_URL":               issue_url,
+            "PROJECT_ID":              project_id,
+            "ITEM_ID":                 item["id"],
+            "STATUS_FIELD_ID":         status_field_id,
+            "PROJECT_STATUS_IN_REVIEW": status_in_review,
         }
 
         # ── Todo ──────────────────────────────────────────────────────────────
