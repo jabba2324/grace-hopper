@@ -19,7 +19,7 @@ Every poll cycle Grace scans all board items and responds to their state:
 - Docker and Docker Compose
 - A [GitHub Personal Access Token](#github-token) (classic)
 - An [Anthropic API key](https://console.anthropic.com)
-- A GitHub Projects v2 board linked to a repository, with a **Status** field containing: `Todo`, `In Progress`, `In Review`
+- A GitHub Projects v2 board linked to a repository, with a **Status** single-select field
 
 ## Setup
 
@@ -56,6 +56,8 @@ docker compose logs -f
 
 ## Configuration
 
+### Environment variables
+
 Copy `.env.example` to `.env` and fill in the values:
 
 | Variable | Required | Description |
@@ -63,18 +65,27 @@ Copy `.env.example` to `.env` and fill in the values:
 | `ANTHROPIC_API_KEY` | Yes | Anthropic API key |
 | `GITHUB_TOKEN` | Yes | Classic PAT with `repo` + `project` + `workflow` scopes |
 | `GITHUB_USERNAME` | Yes | Your GitHub username |
-| `GITHUB_REPO` | Yes | Repository linked to the project board (`owner/repo`) |
-| `GITHUB_PROJECT_NUMBER` | Yes | Project number from the board URL |
 | `CLAUDE_MODEL` | No | Model to use (default: `claude-sonnet-4-6`) |
 | `PONYTAIL_DEFAULT_MODE` | No | Ponytail mode: `lite`, `full` (default), `ultra`, `off` |
-| `PROJECT_STATUS_TODO` | No | Name of the todo column (default: `Todo`) |
-| `PROJECT_STATUS_IN_PROGRESS` | No | Name of the in-progress column (default: `In Progress`) |
-| `PROJECT_STATUS_IN_REVIEW` | No | Name of the in-review column (default: `In Review`) |
 | `POLL_INTERVAL` | No | Seconds between board checks (default: `5`) |
 | `CODE_SERVER_PASSWORD` | No | Password for the VS Code browser UI (default: `changeme`) |
 | `CODE_SERVER_PORT` | No | Port for the VS Code browser UI (default: `8080`) |
 | `GIT_AUTHOR_NAME` | No | Git commit author name (default: `Agent`) |
 | `GIT_AUTHOR_EMAIL` | No | Git commit author email |
+
+### Repository setup
+
+Repositories and project boards are configured from the Grace Hopper VS Code panel — no env vars needed.
+
+1. Open the Grace Hopper panel in the VS Code activity bar
+2. Click **Add Repository** (`+` icon in the panel toolbar)
+3. Select a GitHub repository from the dropdown
+4. Select the project board to watch
+5. Map the board's Status column names to Grace's three roles (Todo / In Progress / In Review) — the actual column names from your project are shown so they don't need to match any default
+
+Configuration is stored in `state/repos.json` and is shared between the poller, the worker, and the VS Code extension. You can monitor multiple repositories and project boards simultaneously.
+
+**Single-repo fallback:** if `state/repos.json` is absent or empty, Grace falls back to `GITHUB_REPO` + `GITHUB_PROJECT_NUMBER` env vars (and the optional `PROJECT_STATUS_*` vars for column name overrides). This keeps existing setups working without any changes.
 
 ### Choosing a model
 
@@ -86,11 +97,7 @@ Copy `.env.example` to `.env` and fill in the values:
 
 ## Project board setup
 
-Your GitHub Projects v2 board must have a **Status** single-select field with at least these columns (names are configurable via `.env`):
-
-```
-Todo → In Progress → In Review
-```
+Your GitHub Projects v2 board must have a **Status** single-select field with three columns representing the todo, in-progress, and in-review stages. The column names can be anything — you map them to Grace's roles when you add the repo in the VS Code panel.
 
 Write issues clearly — the title and body are passed directly to Claude as the task goal.
 

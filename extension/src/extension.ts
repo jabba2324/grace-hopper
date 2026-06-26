@@ -341,6 +341,14 @@ async function pickableProjects(owner: string): Promise<readonly ProjectItem[]> 
     }));
 }
 
+async function fetchStatusOptions(owner: string, projectNumber: number): Promise<string[]> {
+    const raw  = await runGh('project', 'field-list', String(projectNumber),
+                             '--owner', owner, '--format', 'json', '--limit', '30');
+    const data = JSON.parse(raw) as { fields?: Array<{ name: string; options?: Array<{ name: string }> }> };
+    const field = data.fields?.find(f => f.name === 'Status' && Array.isArray(f.options));
+    return field?.options?.map(o => o.name) ?? [];
+}
+
 // ── Activation ────────────────────────────────────────────────────────────────
 
 export function activate(context: vscode.ExtensionContext): void {
@@ -376,7 +384,7 @@ export function activate(context: vscode.ExtensionContext): void {
             // Step 1 — pick a repo (spinner shows while gh fetches)
             const repoItem = await vscode.window.showQuickPick(
                 pickableRepos().catch(e => { out.appendLine(`fetchRepos: ${e}`); return []; }),
-                { title: 'Monitor Repository (1/2)', placeHolder: 'Select a GitHub repository…', matchOnDescription: true },
+                { title: 'Add Repository — Select GitHub repository', placeHolder: 'Select a repository to monitor…', matchOnDescription: true },
             );
             if (!repoItem) { return; }
             const repo  = repoItem.repoName;
@@ -385,10 +393,44 @@ export function activate(context: vscode.ExtensionContext): void {
             // Step 2 — pick a project board (spinner shows while gh fetches)
             const projectItem = await vscode.window.showQuickPick(
                 pickableProjects(owner).catch(e => { out.appendLine(`fetchProjects: ${e}`); return []; }),
-                { title: `Monitor Repository (2/2) — ${repo}`, placeHolder: 'Select a project board…' },
+                { title: `Add Repository · ${repo} — Select project board`, placeHolder: 'Select the GitHub Projects v2 board to watch…' },
             );
             if (!projectItem) { return; }
             const projectNumber = projectItem.projectNumber;
+
+            // Steps 3–5 — map the project's actual Status column names to Grace's roles.
+            // These only show when the project has a Status single-select field; if the
+            // fetch fails or the field is absent the defaults ("Todo" / "In Progress" /
+            // "In Review") are used silently.
+            let statusTodo       = 'Todo';
+            let statusInProgress = 'In Progress';
+            let statusInReview   = 'In Review';
+
+            const statusOptions = await fetchStatusOptions(owner, projectNumber)
+                .catch(e => { out.appendLine(`fetchStatusOptions: ${e}`); return [] as string[]; });
+
+            if (statusOptions.length > 0) {
+                const todoStatus = await vscode.window.showQuickPick(statusOptions, {
+                    title: `Add Repository · ${repo} — Map Status: To Do`,
+                    placeHolder: 'Which column should Grace pick new tasks from?',
+                });
+                if (!todoStatus) { return; }
+                statusTodo = todoStatus;
+
+                const inProgressStatus = await vscode.window.showQuickPick(statusOptions, {
+                    title: `Add Repository · ${repo} — Map Status: In Progress`,
+                    placeHolder: 'Which column means the task is being worked on (or is resumable)?',
+                });
+                if (!inProgressStatus) { return; }
+                statusInProgress = inProgressStatus;
+
+                const inReviewStatus = await vscode.window.showQuickPick(statusOptions, {
+                    title: `Add Repository · ${repo} — Map Status: In Review`,
+                    placeHolder: 'Which column means a PR is open and Grace should watch CI?',
+                });
+                if (!inReviewStatus) { return; }
+                statusInReview = inReviewStatus;
+            }
 
             // Seed from env-var repo so we don't silently drop existing single-repo setup
             const existing = readReposFile();
@@ -400,7 +442,7 @@ export function activate(context: vscode.ExtensionContext): void {
                 }
             }
             const repos = existing.filter(r => r.repo !== repo);
-            repos.push({ repo, projectNumber });
+            repos.push({ repo, projectNumber, statusTodo, statusInProgress, statusInReview });
             fs.writeFileSync(REPOS_FILE, JSON.stringify(repos, null, 2));
             provider.refresh();
             vscode.window.showInformationMessage(`Now monitoring ${repo} (project #${projectNumber})`);
