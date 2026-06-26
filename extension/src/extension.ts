@@ -60,11 +60,11 @@ function getCurrentBranch(workspacePath: string): string | null {
 
 const STATUS_ORDER: Record<Status, number> = {
     running:    0,
-    stale:      1,
-    failed:     2,
-    completed:  3,
-    dispatched: 4,
-    paused:     5,
+    failed:     1,
+    paused:     2,
+    completed:  3,  // completed beats stale — a finished ci-fix should win
+    stale:      4,  // stale task entry shouldn't override completed ci-fix
+    dispatched: 5,
     unknown:    6,
 };
 

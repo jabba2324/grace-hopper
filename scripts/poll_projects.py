@@ -254,9 +254,10 @@ def poll(project: dict, status_field: dict) -> None:
 
         # ── In Progress ───────────────────────────────────────────────────────
         elif board_status == STATUS_IN_PROGRESS:
-            entry = get_entry(issue_number)
-            if entry and entry.get("status") in ("paused", "failed"):
-                log.info("Issue #%s — %s, waiting for user action", issue_number, entry.get("status"))
+            # Check any entry type for paused/failed — don't auto-resume
+            any_entry = get_entry(issue_number, "task") or get_entry(issue_number, "ci-fix")
+            if any_entry and any_entry.get("status") in ("paused", "failed"):
+                log.info("Issue #%s — %s, waiting for user action", issue_number, any_entry.get("status"))
                 continue
             running, stale = is_active(issue_number)
             if running:

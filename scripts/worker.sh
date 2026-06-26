@@ -254,41 +254,29 @@ CLAUDE_PROMPT="$(cat "$GOAL_FILE")"
 rm -f "$GOAL_FILE"
 
 PAUSE_FILE="/app/state/pause-${ISSUE_NUMBER}"
-PAUSED=false
 
-# Use a named pipe so we get separate PIDs for claude and tee
-FIFO="$(mktemp -u /tmp/gh-fifo-XXXXXX)"
-mkfifo "$FIFO"
-
-tee -a "$LOGFILE" < "$FIFO" &
-TEE_PID=$!
-
+# Claude writes directly to the log file — no FIFO race condition.
+# tail --pid mirrors to stdout so docker compose logs still show output.
 claude --dangerously-skip-permissions --model "${CLAUDE_MODEL:-claude-sonnet-4-6}" \
-    -p "$CLAUDE_PROMPT" < /dev/null > "$FIFO" 2>&1 &
+    -p "$CLAUDE_PROMPT" < /dev/null >> "$LOGFILE" 2>&1 &
 CLAUDE_PID=$!
-
-rm -f "$FIFO"  # safe once both ends are open
+tail -f "$LOGFILE" --pid="$CLAUDE_PID" &
 
 # Poll for pause signal while Claude runs
 while kill -0 "$CLAUDE_PID" 2>/dev/null; do
-    sleep 5
+    sleep 3
     if [[ -f "$PAUSE_FILE" ]]; then
         log "=== Pause requested — stopping Claude ==="
         kill -TERM "$CLAUDE_PID" 2>/dev/null || true
         wait "$CLAUDE_PID" 2>/dev/null || true
         rm -f "$PAUSE_FILE"
-        PAUSED=true
-        break
+        EXIT_STATUS=paused
+        exit 0   # EXIT trap: save_state paused; rm lockfile
     fi
 done
 
-wait "$CLAUDE_PID" 2>/dev/null || true; CLAUDE_EXIT=$?
-wait "$TEE_PID"  2>/dev/null || true
-
-if [[ "$PAUSED" == "true" ]]; then
-    EXIT_STATUS=paused
-    exit 0
-fi
+wait "$CLAUDE_PID" 2>/dev/null
+CLAUDE_EXIT=$?
 
 if [[ "$CLAUDE_EXIT" -ne 0 ]]; then
     log "=== ERROR: Claude exited with code ${CLAUDE_EXIT} ==="
