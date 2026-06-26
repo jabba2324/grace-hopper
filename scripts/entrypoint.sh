@@ -5,8 +5,6 @@ required_vars=(
     ANTHROPIC_API_KEY
     GITHUB_TOKEN
     GITHUB_USERNAME
-    GITHUB_REPO
-    GITHUB_PROJECT_NUMBER
 )
 for var in "${required_vars[@]}"; do
     if [[ -z "${!var:-}" ]]; then
