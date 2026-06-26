@@ -57,6 +57,15 @@ def upsert(entry: dict) -> None:
     _save(tasks)
 
 
+def get_entry(issue_number: int, task_type: str = "task") -> dict | None:
+    """Return the tasks.json record for this issue and type, or None."""
+    tasks = _load()
+    return next(
+        (t for t in tasks if t.get("issueNumber") == issue_number and t.get("type") == task_type),
+        None,
+    )
+
+
 def patch(issue_number: int, task_type: str, **fields) -> None:
     """Update specific fields on an existing record."""
     tasks = _load()

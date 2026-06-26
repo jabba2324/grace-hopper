@@ -262,33 +262,28 @@ export function activate(context: vscode.ExtensionContext): void {
         vscode.commands.registerCommand('graceHopper.refresh', () => provider.refresh()),
 
         vscode.commands.registerCommand('graceHopper.rebuildState', () => {
-            try {
-                if (!fs.existsSync(TASKS_FILE)) {
-                    vscode.window.showInformationMessage('No tasks.json found — nothing to rebuild');
-                    return;
-                }
-                const tasks = JSON.parse(fs.readFileSync(TASKS_FILE, 'utf8')) as Record<string, unknown>[];
-                let fixed = 0;
-                for (const t of tasks) {
-                    const status  = t['status'] as string;
-                    const issueNo = t['issueNumber'] as number;
-                    // Any task that claims to be running/dispatched but has no lock is stale
-                    if ((status === 'running' || status === 'dispatched') && !lockExists(issueNo)) {
-                        t['status'] = 'failed';
-                        delete t['pid'];
-                        fixed++;
+            vscode.window.withProgress(
+                { location: vscode.ProgressLocation.Notification, title: 'Rebuilding state from GitHub…', cancellable: false },
+                () => new Promise<void>(resolve => {
+                    try {
+                        const result = cp.execSync('python3 /app/scripts/rebuild_state.py', {
+                            encoding: 'utf8',
+                            env: { ...process.env, GH_TOKEN: process.env.GITHUB_TOKEN ?? '' },
+                            timeout: 30_000,
+                        });
+                        const { fixed } = JSON.parse(result.trim() || '{"fixed":[]}') as { fixed: string[] };
+                        provider.refresh();
+                        vscode.window.showInformationMessage(
+                            fixed.length > 0
+                                ? `Rebuilt — ${fixed.length} task(s) corrected:\n${fixed.join('\n')}`
+                                : 'State is consistent with GitHub — nothing to fix'
+                        );
+                    } catch (e) {
+                        vscode.window.showErrorMessage(`Rebuild failed: ${e}`);
                     }
-                }
-                fs.writeFileSync(TASKS_FILE, JSON.stringify(tasks, null, 2));
-                provider.refresh();
-                vscode.window.showInformationMessage(
-                    fixed > 0
-                        ? `Rebuilt — ${fixed} stale task(s) marked as Failed (use Retry to re-dispatch)`
-                        : 'State looks clean — no stale tasks found'
-                );
-            } catch (e) {
-                vscode.window.showErrorMessage(`Rebuild failed: ${e}`);
-            }
+                    resolve();
+                })
+            );
         }),
         vscode.commands.registerCommand('graceHopper.openWorkspace', (wsPath: string) => {
             vscode.commands.executeCommand(
