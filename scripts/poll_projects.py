@@ -12,10 +12,9 @@ import sys
 import time
 from pathlib import Path
 
-import requests
-
 sys.path.insert(0, "/app/scripts")
 import state as task_state
+from github import GH_ENV, gql, gh
 
 logging.basicConfig(
     level=logging.INFO,
@@ -24,7 +23,6 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-GH_TOKEN          = os.environ["GITHUB_TOKEN"]
 _GITHUB_REPO      = os.environ["GITHUB_REPO"]
 REPO_OWNER, REPO_NAME = _GITHUB_REPO.split("/", 1)
 PROJECT_NUMBER    = int(os.environ["GITHUB_PROJECT_NUMBER"])
@@ -34,29 +32,6 @@ STATUS_IN_REVIEW  = os.environ.get("PROJECT_STATUS_IN_REVIEW", "In Review")
 POLL_INTERVAL     = int(os.environ.get("POLL_INTERVAL", "5"))
 STATE_DIR         = Path("/app/state")
 LOCK_DIR          = STATE_DIR / "active"
-
-GRAPHQL_URL = "https://api.github.com/graphql"
-GQL_HEADERS = {"Authorization": f"Bearer {GH_TOKEN}", "Content-Type": "application/json"}
-GH_ENV      = {**os.environ, "GH_TOKEN": GH_TOKEN}
-
-
-# ── GraphQL / gh helpers ──────────────────────────────────────────────────────
-
-def gql(query: str, variables: dict | None = None) -> dict:
-    resp = requests.post(
-        GRAPHQL_URL, headers=GQL_HEADERS,
-        json={"query": query, "variables": variables or {}}, timeout=30,
-    )
-    resp.raise_for_status()
-    data = resp.json()
-    if "errors" in data:
-        raise RuntimeError(f"GraphQL errors: {data['errors']}")
-    return data["data"]
-
-
-def gh(*args: str) -> str:
-    result = subprocess.run(["gh", *args], capture_output=True, text=True, env=GH_ENV)
-    return result.stdout.strip()
 
 
 GET_PROJECT = """
@@ -185,7 +160,7 @@ def resolve_branch(repo_nwo: str, issue_number: int, issue_title: str) -> str:
 def dispatch(mode: str, base_env: dict, **extra: str) -> None:
     log.info("Dispatching %s for issue #%s", mode, base_env["ISSUE_NUMBER"])
     subprocess.Popen(
-        ["/app/scripts/worker.sh"],
+        ["python3", "/app/scripts/worker.py"],
         env={**os.environ, "TASK_MODE": mode, **base_env, **extra},
     )
 

@@ -194,9 +194,10 @@ State in `./state/`:
 │   ├── entrypoint.sh           # Agent startup: auth + Ponytail + poller
 │   ├── code_server.sh          # code-server startup: auth + VS Code web server
 │   ├── poll_projects.py        # Single polling loop — handles Todo/In Progress/In Review
-│   ├── worker.sh               # Unified worker: TASK_MODE=new|resume|ci-fix
+│   ├── worker.py               # Unified worker: TASK_MODE=new|resume|ci-fix
+│   ├── run_claude.js           # Node.js runner: stream-json Claude invocation, pause/session handling
+│   ├── github.py               # Shared GitHub API helpers (gql, gh)
 │   ├── state.py                # tasks.json read/write module
-│   ├── update_state.py         # CLI wrapper for state.py (called from worker.sh)
 │   └── rebuild_state.py        # Reconciles tasks.json against live GitHub board (used by VS Code extension)
 ├── extension/                  # Grace Hopper VS Code extension (auto-installed in code-server)
 ├── workspaces/                 # Cloned repositories (Docker volume, gitignored)
