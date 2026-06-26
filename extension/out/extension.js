@@ -291,26 +291,13 @@ async function pickableRepos() {
     const repos = JSON.parse(raw);
     return repos.map(r => ({ label: r.nameWithOwner, description: r.description || '', repoName: r.nameWithOwner }));
 }
-// gh project list/field-list require read:org scope and reject plain user logins.
-// Use GraphQL directly — it works with just the project scope the PAT already has.
-async function gqlProjects(owner) {
-    const userQ = 'query($l:String!){user(login:$l){projectsV2(first:50){nodes{number title}}}}';
-    const orgQ = 'query($l:String!){organization(login:$l){projectsV2(first:50){nodes{number title}}}}';
-    try {
-        const raw = await runGhFile('api', 'graphql', '-f', `query=${userQ}`, '-f', `l=${owner}`);
-        const nodes = JSON.parse(raw)?.data?.user?.projectsV2?.nodes ?? [];
-        if (nodes.length > 0) {
-            return nodes;
-        }
-    }
-    catch { /* fall through to org query */ }
-    const raw = await runGhFile('api', 'graphql', '-f', `query=${orgQ}`, '-f', `l=${owner}`);
-    return JSON.parse(raw)?.data?.organization?.projectsV2?.nodes ?? [];
-}
-async function pickableProjects(owner) {
-    return (await gqlProjects(owner)).map(p => ({
-        label: p.title, description: `#${p.number}`, projectNumber: p.number,
-    }));
+// Fetch only projects linked to the specific repository.
+// gh project list requires read:org scope; repository.projectsV2 works with project scope.
+async function pickableProjects(owner, repo) {
+    const q = 'query($o:String!,$r:String!){repository(owner:$o,name:$r){projectsV2(first:50){nodes{number title}}}}';
+    const raw = await runGhFile('api', 'graphql', '-f', `query=${q}`, '-f', `o=${owner}`, '-f', `r=${repo}`);
+    const nodes = JSON.parse(raw)?.data?.repository?.projectsV2?.nodes ?? [];
+    return nodes.map(p => ({ label: p.title, description: `#${p.number}`, projectNumber: p.number }));
 }
 async function fetchStatusOptions(owner, projectNumber) {
     const userQ = 'query($l:String!,$n:Int!){user(login:$l){projectV2(number:$n){fields(first:20){nodes{...on ProjectV2SingleSelectField{name options{name}}}}}}}';
@@ -359,9 +346,9 @@ function activate(context) {
             return;
         }
         const repo = repoItem.repoName;
-        const owner = repo.split('/')[0];
+        const [owner, repoName] = repo.split('/');
         // Step 2 — pick a project board (spinner shows while gh fetches)
-        const projectItem = await vscode.window.showQuickPick(pickableProjects(owner).catch(e => { out.appendLine(`fetchProjects: ${e}`); return []; }), { title: `Add Repository · ${repo} — Select project board`, placeHolder: 'Select the GitHub Projects v2 board to watch…' });
+        const projectItem = await vscode.window.showQuickPick(pickableProjects(owner, repoName).catch(e => { out.appendLine(`fetchProjects: ${e}`); return []; }), { title: `Add Repository · ${repo} — Select project board`, placeHolder: 'Select the GitHub Projects v2 board to watch…' });
         if (!projectItem) {
             return;
         }
