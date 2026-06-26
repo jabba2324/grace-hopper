@@ -3,9 +3,10 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as cp from 'child_process';
 
-const STATE_DIR  = '/app/state';
-const TASKS_FILE = path.join(STATE_DIR, 'tasks.json');
-const LOCK_DIR   = path.join(STATE_DIR, 'active');
+const STATE_DIR    = '/app/state';
+const TASKS_FILE   = path.join(STATE_DIR, 'tasks.json');
+const LOCK_DIR     = path.join(STATE_DIR, 'active');
+const CLAUDE_HOME  = '/home/agent/.claude';
 
 type Status   = 'running' | 'dispatched' | 'stale' | 'completed' | 'failed' | 'paused' | 'unknown';
 type TaskType = 'task' | 'resume' | 'ci-fix';
@@ -46,6 +47,20 @@ function liveStatus(task: Task): Status {
     // so it doesn't fight against a 'completed' entry in the merge.
     if (task.status === 'running') { return 'stale'; }
     return task.status;
+}
+
+// Returns the session ID of the most recent Claude conversation for a workspace,
+// by finding the newest .jsonl in ~/.claude/projects/<path-slug>/
+function latestSessionId(workspacePath: string): string | undefined {
+    const slug = workspacePath.replace(/\//g, '-');
+    const dir  = path.join(CLAUDE_HOME, 'projects', slug);
+    try {
+        const files = fs.readdirSync(dir)
+            .filter(f => f.endsWith('.jsonl'))
+            .map(f => ({ name: f, mtime: fs.statSync(path.join(dir, f)).mtimeMs }))
+            .sort((a, b) => b.mtime - a.mtime);
+        return files[0]?.name.replace('.jsonl', '');
+    } catch { return undefined; }
 }
 
 function getCurrentBranch(workspacePath: string): string | null {
@@ -342,12 +357,16 @@ export function activate(context: vscode.ExtensionContext): void {
                     vscode.window.showErrorMessage('No workspace path for this task');
                     return;
                 }
+                const sessionId = latestSessionId(workspacePath);
+                const cmd = sessionId
+                    ? `claude --dangerously-skip-permissions --resume ${sessionId}`
+                    : `claude --dangerously-skip-permissions`;
                 const terminal = vscode.window.createTerminal({
                     name: `Claude — ${arg instanceof TaskNode ? arg.task.title : 'Task'}`,
                     location: vscode.TerminalLocation.Panel,
                     cwd: workspacePath,
                 });
-                terminal.sendText('claude --dangerously-skip-permissions');
+                terminal.sendText(cmd);
                 terminal.show();
             }),
 
