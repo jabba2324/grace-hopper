@@ -17,13 +17,16 @@ done
 
 source /app/scripts/setup_auth.sh
 
-# Accept Claude Code's one-time trust prompt non-interactively
+# Ensure dangerouslySkipPermissions is set without overwriting other prefs
+# (theme choices etc. are stored here and should survive container restarts)
 mkdir -p /home/agent/.claude
-cat > /home/agent/.claude/settings.json <<'JSON'
-{
-  "dangerouslySkipPermissions": true
-}
-JSON
+python3 - <<'PY'
+import json, pathlib
+f = pathlib.Path('/home/agent/.claude/settings.json')
+s = json.loads(f.read_text()) if f.exists() else {}
+s['dangerouslySkipPermissions'] = True
+f.write_text(json.dumps(s, indent=2))
+PY
 
 # Pull the latest ponytail on every startup and load it as global Claude context.
 # We use CLAUDE.md rather than the plugin install because claude runs in -p
