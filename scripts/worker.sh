@@ -282,12 +282,12 @@ ${GIT_STATUS:-  (working tree is clean)}
 ${PREV_SESSION:+
 ## Previous session history
 
-Your previous session's full conversation is stored at:
+The previous session conversation is stored at:
 \`${PREV_SESSION}\`
 
 Read this file to understand what was investigated, what approaches were tried,
-and what decisions were made. The \`assistant\` entries (look for
-\`"role":"assistant"\` and \`"type":"text"\` content blocks) contain the
+and what decisions were made. The assistant entries (look for
+role:assistant and type:text content blocks) contain the
 reasoning. Use this to avoid repeating work or re-investigating dead ends.
 }
 ## Instructions
