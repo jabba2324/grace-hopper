@@ -357,6 +357,9 @@ export function activate(context: vscode.ExtensionContext): void {
                     vscode.window.showErrorMessage('No workspace path for this task');
                     return;
                 }
+                vscode.commands.executeCommand('workbench.view.explorer');
+                vscode.commands.executeCommand('revealInExplorer', vscode.Uri.file(workspacePath));
+
                 const sessionId = latestSessionId(workspacePath);
                 const cmd = sessionId
                     ? `claude --resume ${sessionId}`
