@@ -5,6 +5,7 @@
 # Docker volumes (generated at runtime)
 workspaces/
 state/
+claude-home/
 
 # macOS
 .DS_Store
