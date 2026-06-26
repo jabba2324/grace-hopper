@@ -1,6 +1,6 @@
 # Grace Hopper
 
-An autonomous software engineering agent that runs on Docker. It watches a GitHub Projects v2 board for tickets, clones the relevant repository, implements the changes using Claude Code, and raises a pull request — all without human intervention.
+An autonomous software engineering agent that runs on Docker. It watches one or more GitHub Projects v2 boards for tickets, clones the relevant repositories, implements the changes using Claude Code, and raises pull requests — all without human intervention.
 
 Runs anywhere Docker runs: your laptop, a VPS, a cloud VM, or CI.
 
@@ -53,6 +53,18 @@ Required scopes:
 docker compose up -d --build
 docker compose logs -f
 ```
+
+### 4. Add repositories
+
+Open `http://localhost:8080` in your browser, then open the **Grace Hopper** panel in the activity bar.
+
+Click **+** (Add Repository) in the panel toolbar and follow the three-step flow:
+
+1. Select a GitHub repository
+2. Select the project board linked to it
+3. Map the board's Status column names to Grace's three roles
+
+You can add as many repositories and project boards as you like. Configuration is saved to `state/repos.json` and takes effect on the next poll cycle.
 
 ## Configuration
 
@@ -124,16 +136,19 @@ The agent's workspaces appear as folders in the file explorer. You can open a te
 The Grace Hopper VS Code extension is automatically installed in code-server and provides a live task panel in the VS Code activity bar.
 
 **What it shows:**
-- All tasks from the project board, sorted by status
+- All monitored repositories as top-level nodes, each showing a task count
+- Tasks grouped under their repository, sorted by status
 - Per-task details: ticket link, branch, PR link, workspace path, log file
 
-**Inline controls on each task row:**
+**Inline controls:**
 - **Pause** (running tasks) — gracefully stops the Claude process; task can be resumed by the agent or a developer
 - **Resume** (paused or failed tasks) — re-dispatches the task to the agent on the next poll
 - **Tail Logs** — opens a live log stream for that task in an output panel
 - **✦ (Claude)** (non-running tasks) — opens the workspace folder in VS Code and starts an interactive Claude Code session, resuming the agent's last conversation where possible
+- **− (Remove)** on a repository node — stops monitoring that repo
 
 **Panel toolbar:**
+- **+ (Add Repository)** — guided flow to select a repo, pick its project board, and map Status column names
 - **Rebuild State** — reconciles `tasks.json` against the live GitHub board, correcting any stale or mismatched statuses
 - **Refresh** — manually re-reads `tasks.json`
 
@@ -184,6 +199,7 @@ State in `./state/`:
 
 | File / Directory | Purpose |
 |---|---|
+| `repos.json` | Monitored repositories and project boards — written by the VS Code extension, read by the poller and worker |
 | `tasks.json` | Single source of truth — status for every task, updated by the poller and worker |
 | `active/issue-<N>.lock` | Lock file written while a worker is running; used to detect live vs. stale processes |
 | `logs/` | Per-task log files |
