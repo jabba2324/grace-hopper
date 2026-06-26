@@ -359,8 +359,8 @@ export function activate(context: vscode.ExtensionContext): void {
                 }
                 const sessionId = latestSessionId(workspacePath);
                 const cmd = sessionId
-                    ? `claude --dangerously-skip-permissions --resume ${sessionId}`
-                    : `claude --dangerously-skip-permissions`;
+                    ? `claude --resume ${sessionId}`
+                    : `claude`;
                 const terminal = vscode.window.createTerminal({
                     name: `Claude — ${arg instanceof TaskNode ? arg.task.title : 'Task'}`,
                     location: vscode.TerminalLocation.Panel,
