@@ -310,6 +310,37 @@ class GraceHopperProvider implements vscode.TreeDataProvider<Node> {
     }
 }
 
+// ── GitHub quickpick helpers ──────────────────────────────────────────────────
+
+function runGh(...args: string[]): Promise<string> {
+    return new Promise((resolve, reject) => {
+        cp.exec(
+            ['gh', ...args].join(' '),
+            { encoding: 'utf8', env: { ...process.env, GH_TOKEN: process.env['GITHUB_TOKEN'] ?? '' }, timeout: 15_000 },
+            (err, stdout) => err ? reject(err) : resolve(stdout.trim()),
+        );
+    });
+}
+
+interface RepoItem extends vscode.QuickPickItem { repoName: string; }
+interface ProjectItem extends vscode.QuickPickItem { projectNumber: number; }
+
+async function pickableRepos(): Promise<readonly RepoItem[]> {
+    const raw   = await runGh('repo', 'list', '--json', 'nameWithOwner,description', '--limit', '100');
+    const repos = JSON.parse(raw) as { nameWithOwner: string; description: string }[];
+    return repos.map(r => ({ label: r.nameWithOwner, description: r.description || '', repoName: r.nameWithOwner }));
+}
+
+async function pickableProjects(owner: string): Promise<readonly ProjectItem[]> {
+    const raw  = await runGh('project', 'list', '--owner', owner, '--format', 'json', '--limit', '50');
+    const data = JSON.parse(raw) as { projects: Array<{ number: number; title: string }> };
+    return (data.projects ?? []).map(p => ({
+        label:         p.title,
+        description:   `#${p.number}`,
+        projectNumber: p.number,
+    }));
+}
+
 // ── Activation ────────────────────────────────────────────────────────────────
 
 export function activate(context: vscode.ExtensionContext): void {
@@ -342,19 +373,22 @@ export function activate(context: vscode.ExtensionContext): void {
         vscode.commands.registerCommand('graceHopper.refresh', () => provider.refresh()),
 
         vscode.commands.registerCommand('graceHopper.addRepo', async () => {
-            const repo = await vscode.window.showInputBox({
-                prompt:       'GitHub repository to monitor',
-                placeHolder:  'owner/repo',
-                validateInput: v => (v ?? '').includes('/') ? null : 'Must be in owner/repo format',
-            });
-            if (!repo) { return; }
+            // Step 1 — pick a repo (spinner shows while gh fetches)
+            const repoItem = await vscode.window.showQuickPick(
+                pickableRepos().catch(e => { out.appendLine(`fetchRepos: ${e}`); return []; }),
+                { title: 'Monitor Repository (1/2)', placeHolder: 'Select a GitHub repository…', matchOnDescription: true },
+            );
+            if (!repoItem) { return; }
+            const repo  = repoItem.repoName;
+            const owner = repo.split('/')[0];
 
-            const numStr = await vscode.window.showInputBox({
-                prompt:       'GitHub Projects v2 board number (visible in the project URL)',
-                placeHolder:  '1',
-                validateInput: v => /^\d+$/.test(v ?? '') ? null : 'Must be a number',
-            });
-            if (!numStr) { return; }
+            // Step 2 — pick a project board (spinner shows while gh fetches)
+            const projectItem = await vscode.window.showQuickPick(
+                pickableProjects(owner).catch(e => { out.appendLine(`fetchProjects: ${e}`); return []; }),
+                { title: `Monitor Repository (2/2) — ${repo}`, placeHolder: 'Select a project board…' },
+            );
+            if (!projectItem) { return; }
+            const projectNumber = projectItem.projectNumber;
 
             // Seed from env-var repo so we don't silently drop existing single-repo setup
             const existing = readReposFile();
@@ -366,10 +400,10 @@ export function activate(context: vscode.ExtensionContext): void {
                 }
             }
             const repos = existing.filter(r => r.repo !== repo);
-            repos.push({ repo, projectNumber: parseInt(numStr, 10) });
+            repos.push({ repo, projectNumber });
             fs.writeFileSync(REPOS_FILE, JSON.stringify(repos, null, 2));
             provider.refresh();
-            vscode.window.showInformationMessage(`Now monitoring ${repo} (project #${numStr})`);
+            vscode.window.showInformationMessage(`Now monitoring ${repo} (project #${projectNumber})`);
         }),
 
         vscode.commands.registerCommand('graceHopper.removeRepo', (node: RepoNode) => {
