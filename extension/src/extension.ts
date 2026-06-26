@@ -335,6 +335,22 @@ export function activate(context: vscode.ExtensionContext): void {
                 terminal.show();
             }),
 
+        vscode.commands.registerCommand('graceHopper.openClaude',
+            (arg: TaskNode) => {
+                const workspacePath = arg instanceof TaskNode ? arg.task.workspacePath : undefined;
+                if (!workspacePath) {
+                    vscode.window.showErrorMessage('No workspace path for this task');
+                    return;
+                }
+                const terminal = vscode.window.createTerminal({
+                    name: `Claude — ${arg instanceof TaskNode ? arg.task.title : 'Task'}`,
+                    location: vscode.TerminalLocation.Panel,
+                    cwd: workspacePath,
+                });
+                terminal.sendText('claude --dangerously-skip-permissions --resume');
+                terminal.show();
+            }),
+
     );
 
     try {

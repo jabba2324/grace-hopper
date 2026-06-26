@@ -11,8 +11,5 @@ password: ${CODE_SERVER_PASSWORD}
 cert: false
 YAML
 
-echo "Installing extensions..."
-code-server --install-extension anthropic.claude-code 2>&1 || true
-
 echo "code-server starting on port 8080"
 exec code-server /workspaces

@@ -55,6 +55,11 @@
         "command": "graceHopper.tailLogs",
         "title": "Tail Logs",
         "icon": "$(output)"
+      },
+      {
+        "command": "graceHopper.openClaude",
+        "title": "Open Claude",
+        "icon": "$(sparkle)"
       }
     ],
     "menus": {
@@ -90,6 +95,11 @@
           "command": "graceHopper.tailLogs",
           "when": "view == graceHopper && viewItem =~ /Task/",
           "group": "inline@2"
+        },
+        {
+          "command": "graceHopper.openClaude",
+          "when": "view == graceHopper && viewItem =~ /Task/ && viewItem != runningTask",
+          "group": "inline@3"
         }
       ]
     }
