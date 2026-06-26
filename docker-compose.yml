@@ -16,6 +16,7 @@ services:
     volumes:
       - ./workspaces:/workspaces
       - ./state:/app/state
+      - claude-home:/home/agent/.claude
     restart: unless-stopped
 
   agent:
@@ -47,7 +48,11 @@ services:
     volumes:
       - ./workspaces:/workspaces
       - ./state:/app/state
+      - claude-home:/home/agent/.claude
     restart: unless-stopped
     # Allow git operations and subprocess spawning
     security_opt:
       - no-new-privileges:false
+
+volumes:
+  claude-home:   # shared Claude Code state — conversation history, memory, settings
