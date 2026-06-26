@@ -14,7 +14,6 @@ services:
       # GRACE_GITHUB_TOKEN carries the same value under a name that isn't filtered.
       - GRACE_GITHUB_TOKEN=${GITHUB_TOKEN}
       - GITHUB_USERNAME=${GITHUB_USERNAME}
-      - GITHUB_REPO=${GITHUB_REPO}
       - GIT_AUTHOR_NAME=${GIT_AUTHOR_NAME:-Agent}
       - GIT_AUTHOR_EMAIL=${GIT_AUTHOR_EMAIL:-mail@chrissewell.net}
     volumes:
@@ -38,14 +37,6 @@ services:
       - PONYTAIL_DEFAULT_MODE=${PONYTAIL_DEFAULT_MODE:-full}
       - GITHUB_TOKEN=${GITHUB_TOKEN}
       - GITHUB_USERNAME=${GITHUB_USERNAME}
-      # GitHub Projects v2 — repo the project board is linked to (owner/repo)
-      - GITHUB_REPO=${GITHUB_REPO}
-      - GITHUB_PROJECT_NUMBER=${GITHUB_PROJECT_NUMBER}
-      # Status field values in your project board (exact strings, case-sensitive)
-      - PROJECT_STATUS_TODO=${PROJECT_STATUS_TODO:-Todo}
-      - PROJECT_STATUS_IN_PROGRESS=${PROJECT_STATUS_IN_PROGRESS:-In Progress}
-      - PROJECT_STATUS_IN_REVIEW=${PROJECT_STATUS_IN_REVIEW:-In Review}
-      # How often to poll the project board (seconds)
       - POLL_INTERVAL=${POLL_INTERVAL:-5}
       # Optional: default git author identity
       - GIT_AUTHOR_NAME=${GIT_AUTHOR_NAME:-Agent}
