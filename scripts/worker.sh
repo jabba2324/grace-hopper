@@ -54,7 +54,8 @@ save_state() {
 }
 
 echo $$ > "$LOCKFILE"
-trap "save_state failed; rm -f '$LOCKFILE'" EXIT
+EXIT_STATUS=failed   # updated to 'paused' or 'completed' before normal exit
+trap 'save_state "$EXIT_STATUS"; rm -f "$LOCKFILE"' EXIT
 
 log "=== [${TASK_MODE}] issue #${ISSUE_NUMBER}: ${ISSUE_TITLE} ==="
 log "=== Repo: ${REPO_NAME_WITH_OWNER} ==="
@@ -285,9 +286,7 @@ wait "$CLAUDE_PID" 2>/dev/null || true; CLAUDE_EXIT=$?
 wait "$TEE_PID"  2>/dev/null || true
 
 if [[ "$PAUSED" == "true" ]]; then
-    log "=== Task paused — workspace preserved, will resume on next dispatch ==="
-    save_state paused
-    trap "rm -f '$LOCKFILE'" EXIT
+    EXIT_STATUS=paused
     exit 0
 fi
 
@@ -344,6 +343,5 @@ else
     fi
 fi
 
-save_state completed
-trap "rm -f '$LOCKFILE'" EXIT
+EXIT_STATUS=completed
 log "=== Done ==="
