@@ -244,6 +244,10 @@ GIT_LOG="$(git log "${DEFAULT_BRANCH}..HEAD" --oneline 2>/dev/null || git log --
 GIT_STATUS="$(git status --short)"
 GIT_DIFF_STAT="$(git diff "${DEFAULT_BRANCH}..HEAD" --stat 2>/dev/null || true)"
 
+# Find the most recent conversation history file for this workspace
+WORKSPACE_SLUG="${WORKSPACE//\//-}"
+PREV_SESSION="$(ls -t "/home/agent/.claude/projects/${WORKSPACE_SLUG}"/*.jsonl 2>/dev/null | head -1 || true)"
+
 cat > "$GOAL_FILE" <<GOAL
 You are resuming an in-progress task that was interrupted. Review what was
 already done and continue from where the previous session left off.
@@ -268,14 +272,25 @@ Uncommitted changes:
 \`\`\`
 ${GIT_STATUS:-  (working tree is clean)}
 \`\`\`
+${PREV_SESSION:+
+## Previous session history
 
+Your previous session's full conversation is stored at:
+\`${PREV_SESSION}\`
+
+Read this file to understand what was investigated, what approaches were tried,
+and what decisions were made. The \`assistant\` entries (look for
+\`"role":"assistant"\` and \`"type":"text"\` content blocks) contain the
+reasoning. Use this to avoid repeating work or re-investigating dead ends.
+}
 ## Instructions
 
-1. Read the changed files to understand what was already implemented.
-2. Determine what remains to fully resolve the issue.
-3. Continue without redoing completed work.
-4. Ensure all tests pass.
-5. Stage and commit remaining changes.
+1. Read the previous session history file if available — it captures the full reasoning from the last run.
+2. Read the changed files to understand what was already implemented.
+3. Determine what remains to fully resolve the issue.
+4. Continue without redoing completed work.
+5. Ensure all tests pass.
+6. Stage and commit remaining changes.
 
 Do NOT create a pull request — the system handles that automatically.
 Do not ask for confirmation — work autonomously to completion.
