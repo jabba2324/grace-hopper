@@ -340,7 +340,7 @@ export function activate(context: vscode.ExtensionContext): void {
                 try {
                     const tasks = JSON.parse(fs.readFileSync(TASKS_FILE, 'utf8')) as Record<string, unknown>[];
                     for (const entry of tasks) {
-                        if (entry['issueNumber'] === n && entry['status'] === 'paused') {
+                        if (entry['issueNumber'] === n && (entry['status'] === 'paused' || entry['status'] === 'failed')) {
                             entry['status'] = 'dispatched';
                             delete entry['pid'];
                         }

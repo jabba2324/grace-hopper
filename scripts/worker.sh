@@ -153,7 +153,7 @@ new)
             "$WORKSPACE" 2>&1 | tee -a "$LOGFILE"
     fi
     cd "$WORKSPACE"
-    DEFAULT_BRANCH="$(git remote show origin 2>/dev/null | awk '/HEAD branch/{print $NF}')"
+    DEFAULT_BRANCH="$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's|refs/remotes/origin/||' || echo main)"
     DEFAULT_BRANCH="${DEFAULT_BRANCH:-main}"
     git checkout -b "$BRANCH" 2>&1 | tee -a "$LOGFILE" \
         || git checkout "$BRANCH" 2>&1 | tee -a "$LOGFILE"
@@ -178,7 +178,7 @@ resume)
         git -C "$WORKSPACE" checkout "$BRANCH" 2>&1 | tee -a "$LOGFILE"
     fi
     cd "$WORKSPACE"
-    DEFAULT_BRANCH="$(git remote show origin 2>/dev/null | awk '/HEAD branch/{print $NF}')"
+    DEFAULT_BRANCH="$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's|refs/remotes/origin/||' || echo main)"
     DEFAULT_BRANCH="${DEFAULT_BRANCH:-main}"
     ;;
 
@@ -196,7 +196,7 @@ ci-fix)
         git -C "$WORKSPACE" checkout "$BRANCH" 2>&1 | tee -a "$LOGFILE"
     fi
     cd "$WORKSPACE"
-    DEFAULT_BRANCH="$(git remote show origin 2>/dev/null | awk '/HEAD branch/{print $NF}')"
+    DEFAULT_BRANCH="$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's|refs/remotes/origin/||' || echo main)"
     DEFAULT_BRANCH="${DEFAULT_BRANCH:-main}"
     log "Fetching CI failure logs for run ${FAILED_RUN_ID}..."
     FAILED_LOGS="$(gh run view "$FAILED_RUN_ID" \
