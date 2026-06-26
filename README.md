@@ -2,6 +2,8 @@
 
 An autonomous software engineering agent that runs on Docker. It watches a GitHub Projects v2 board for tickets, clones the relevant repository, implements the changes using Claude Code, and raises a pull request — all without human intervention.
 
+Runs anywhere Docker runs: your laptop, a VPS, a cloud VM, or CI.
+
 ## How it works
 
 Every poll cycle Grace scans all board items and responds to their state:
@@ -69,6 +71,8 @@ Copy `.env.example` to `.env` and fill in the values:
 | `PROJECT_STATUS_IN_PROGRESS` | No | Name of the in-progress column (default: `In Progress`) |
 | `PROJECT_STATUS_IN_REVIEW` | No | Name of the in-review column (default: `In Review`) |
 | `POLL_INTERVAL` | No | Seconds between board checks (default: `60`) |
+| `CODE_SERVER_PASSWORD` | No | Password for the VS Code browser UI (default: `changeme`) |
+| `CODE_SERVER_PORT` | No | Port for the VS Code browser UI (default: `8080`) |
 | `GIT_AUTHOR_NAME` | No | Git commit author name (default: `Agent`) |
 | `GIT_AUTHOR_EMAIL` | No | Git commit author email |
 
@@ -90,21 +94,42 @@ Todo → In Progress → In Review
 
 Write issues clearly — the title and body are passed directly to Claude as the task goal.
 
-## VS Code in the browser
+## VS Code
 
-Grace Hopper ships a `code-server` service that runs VS Code in the browser, sharing the same `workspaces/` volume as the agent. This lets you jump into any active workspace, inspect what the agent has done, and make changes in the exact same environment — same Node.js, Python, `gh` CLI, and git credentials.
+Grace Hopper ships two ways to interact with the agent from VS Code.
 
-Access it at `http://<your-vps>:8080` using the password set in `.env`.
+### Browser UI (code-server)
 
-```bash
-# Set in .env before starting
-CODE_SERVER_PASSWORD=your-strong-password
-CODE_SERVER_PORT=8080   # optional, defaults to 8080
+The `code-server` service runs VS Code in the browser, sharing the same `workspaces/` volume as the agent. When running locally, access it at:
+
+```
+http://localhost:8080
 ```
 
-The agent's workspaces appear as folders inside the VS Code file explorer. You can open a terminal and run the same tools the agent uses (`gh`, `git`, `pytest`, etc.).
+Use the password set in `CODE_SERVER_PASSWORD` in your `.env`.
 
-> **Security:** For a production VPS, put code-server behind a reverse proxy with TLS (nginx, Caddy, Traefik) rather than exposing port 8080 directly. Alternatively, bind to localhost and access via SSH tunnel: `ssh -L 8080:localhost:8080 user@your-vps`.
+The agent's workspaces appear as folders in the file explorer. You can open a terminal and run the same tools the agent uses (`gh`, `git`, `pytest`, etc.).
+
+> **Running on a remote machine?** Either bind to localhost and SSH tunnel (`ssh -L 8080:localhost:8080 user@host`), or put code-server behind a reverse proxy with TLS (nginx, Caddy, Traefik) rather than exposing port 8080 directly.
+
+### Grace Hopper extension
+
+The Grace Hopper VS Code extension is automatically installed in code-server and provides a live task panel in the VS Code activity bar.
+
+**What it shows:**
+- All tasks from the project board, sorted by status
+- Per-task details: ticket link, branch, PR link, workspace path, log file
+
+**Inline controls on each task row:**
+- **Pause** (running tasks) — gracefully stops the Claude process; task can be resumed
+- **Resume** (paused or failed tasks) — re-dispatches the task from where it left off
+- **Tail Logs** — opens a live log stream for that task in an output panel
+
+**Panel toolbar:**
+- **Rebuild State** — reconciles `tasks.json` against the live GitHub board, correcting any stale or mismatched statuses
+- **Refresh** — manually re-reads `tasks.json`
+
+The panel auto-refreshes every 5 seconds and watches for lock file changes so running/stale status updates appear immediately.
 
 ## Ponytail integration
 
@@ -124,23 +149,22 @@ The coding ladder Ponytail enforces (in priority order):
 
 ## Logs and state
 
-Task logs are written to `./state/logs/` and also stream to Docker logs:
+Task logs are written to `./state/logs/` and stream to Docker logs:
 
 ```bash
 docker compose logs -f
-tail -f state/logs/issue-<number>-*.log   # new task
-tail -f state/logs/ci-fix-pr<number>-*.log  # CI fix
-tail -f state/logs/resume-issue-<number>-*.log  # resumed task
+tail -f state/logs/new-issue-<N>-*.log      # new task
+tail -f state/logs/resume-issue-<N>-*.log   # resumed task
+tail -f state/logs/ci-fix-issue-<N>-*.log   # CI fix
 ```
 
-State files in `./state/`:
+State in `./state/`:
 
-| File | Purpose |
+| File / Directory | Purpose |
 |---|---|
-| `dispatched.json` | Issue IDs that have been dispatched to avoid double-processing |
-| `ci_dispatched.json` | `pr:sha` pairs already handled by the CI fix loop |
-| `resumed.json` | `item:sha` pairs already resumed to avoid re-triggering |
-| `active/issue-<N>.lock` | PID lockfiles for running task processes |
+| `tasks.json` | Single source of truth — status for every task, updated by the poller and worker |
+| `active/issue-<N>.lock` | Lock file written while a worker is running; used to detect live vs. stale processes |
+| `logs/` | Per-task log files |
 
 ## Repository layout
 
@@ -156,9 +180,11 @@ State files in `./state/`:
 │   ├── poll_projects.py        # Single polling loop — handles Todo/In Progress/In Review
 │   ├── worker.sh               # Unified worker: TASK_MODE=new|resume|ci-fix
 │   ├── state.py                # tasks.json read/write module
-│   └── update_state.py         # CLI wrapper for state.py (called from worker.sh)
+│   ├── update_state.py         # CLI wrapper for state.py (called from worker.sh)
+│   └── rebuild_state.py        # Reconciles tasks.json against live GitHub board (used by VS Code extension)
+├── extension/                  # Grace Hopper VS Code extension (auto-installed in code-server)
 ├── workspaces/                 # Cloned repositories (Docker volume, gitignored)
-└── state/                      # Dispatcher state, logs, lockfiles (Docker volume, gitignored)
+└── state/                      # Task state, logs, lockfiles (Docker volume, gitignored)
 ```
 
 ## Stopping the agent
