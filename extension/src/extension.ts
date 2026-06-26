@@ -403,7 +403,7 @@ export function activate(context: vscode.ExtensionContext): void {
         context.subscriptions.push(tasksWatcher, lockWatcher);
     } catch (e) { out.appendLine(`Watcher error: ${e}`); }
 
-    const timer = setInterval(() => provider.refresh(), 5_000);
+    const timer = setInterval(() => provider.refresh(), 2_000);
     context.subscriptions.push({ dispose: () => clearInterval(timer) });
 }
 
