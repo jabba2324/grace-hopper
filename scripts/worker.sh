@@ -148,7 +148,8 @@ new)
     if [[ -d "$WORKSPACE/.git" ]]; then
         log "Workspace exists — resetting to default branch"
         git -C "$WORKSPACE" fetch origin 2>&1 | tee -a "$LOGFILE"
-        DEFAULT_BRANCH="$(git -C "$WORKSPACE" remote show origin | awk '/HEAD branch/{print $NF}')"
+        DEFAULT_BRANCH="$(git -C "$WORKSPACE" symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's|refs/remotes/origin/||' || echo main)"
+        DEFAULT_BRANCH="${DEFAULT_BRANCH:-main}"
         git -C "$WORKSPACE" checkout "$DEFAULT_BRANCH" 2>&1 | tee -a "$LOGFILE"
         git -C "$WORKSPACE" reset --hard "origin/$DEFAULT_BRANCH" 2>&1 | tee -a "$LOGFILE"
     else

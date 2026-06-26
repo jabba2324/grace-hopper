@@ -162,6 +162,21 @@ claude.stderr.on('data', chunk => {
 
 claude.on('close', code => {
     if (pauseTimer) clearInterval(pauseTimer);
+    // Flush any final line that had no trailing newline (e.g. the result event)
+    if (buf.trim()) {
+        try {
+            const ev = JSON.parse(buf);
+            if (ev.type === 'result') {
+                success = ev.subtype === 'success' && !ev.is_error;
+                const dur   = ev.duration_ms   ? `${(ev.duration_ms / 1000).toFixed(1)}s`              : '';
+                const cost  = ev.total_cost_usd ? ` $${ev.total_cost_usd.toFixed(4)}`                  : '';
+                const turns = ev.num_turns      ? ` ${ev.num_turns} turn${ev.num_turns > 1 ? 's' : ''}` : '';
+                log(`[${ev.subtype}]${turns} ${dur}${cost}`);
+            } else if (ev.type === 'system' && ev.subtype === 'init') {
+                sessionId = ev.session_id || '';
+            }
+        } catch { /* ignore malformed final line */ }
+    }
     logStream.end(() => {
         if (SESSION_FILE && sessionId) {
             try { fs.writeFileSync(SESSION_FILE, sessionId); } catch { /* ignore */ }
