@@ -269,12 +269,21 @@ class GraceHopperProvider {
     }
 }
 // ── GitHub quickpick helpers ──────────────────────────────────────────────────
+// VS Code strips GITHUB_TOKEN from the extension host process (security policy).
+// GRACE_GITHUB_TOKEN is the same value passed under a name that isn't filtered.
+function ghEnv() {
+    return { ...process.env, GH_TOKEN: process.env['GRACE_GITHUB_TOKEN'] || process.env['GITHUB_TOKEN'] || '' };
+}
+// Shell-joined exec — fine for simple commands with no special characters in args.
 function runGh(...args) {
-    // VS Code strips GITHUB_TOKEN from the extension host process (security policy).
-    // GRACE_GITHUB_TOKEN is the same value passed under a name that isn't filtered.
-    const ghToken = process.env['GRACE_GITHUB_TOKEN'] || process.env['GITHUB_TOKEN'] || '';
     return new Promise((resolve, reject) => {
-        cp.exec(['gh', ...args].join(' '), { encoding: 'utf8', env: { ...process.env, GH_TOKEN: ghToken }, timeout: 15000 }, (err, stdout) => err ? reject(err) : resolve(stdout.trim()));
+        cp.exec(['gh', ...args].join(' '), { encoding: 'utf8', env: ghEnv(), timeout: 15000 }, (err, stdout) => err ? reject(err) : resolve(stdout.trim()));
+    });
+}
+// execFile-based exec — safe for args that may contain spaces/special chars (e.g. GraphQL queries).
+function runGhFile(...args) {
+    return new Promise((resolve, reject) => {
+        cp.execFile('gh', args, { encoding: 'utf8', env: ghEnv(), timeout: 15000 }, (err, stdout) => err ? reject(err) : resolve(stdout.trim()));
     });
 }
 async function pickableRepos() {
@@ -282,20 +291,42 @@ async function pickableRepos() {
     const repos = JSON.parse(raw);
     return repos.map(r => ({ label: r.nameWithOwner, description: r.description || '', repoName: r.nameWithOwner }));
 }
+// gh project list/field-list require read:org scope and reject plain user logins.
+// Use GraphQL directly — it works with just the project scope the PAT already has.
+async function gqlProjects(owner) {
+    const userQ = 'query($l:String!){user(login:$l){projectsV2(first:50){nodes{number title}}}}';
+    const orgQ = 'query($l:String!){organization(login:$l){projectsV2(first:50){nodes{number title}}}}';
+    try {
+        const raw = await runGhFile('api', 'graphql', '-f', `query=${userQ}`, '-f', `l=${owner}`);
+        const nodes = JSON.parse(raw)?.data?.user?.projectsV2?.nodes ?? [];
+        if (nodes.length > 0) {
+            return nodes;
+        }
+    }
+    catch { /* fall through to org query */ }
+    const raw = await runGhFile('api', 'graphql', '-f', `query=${orgQ}`, '-f', `l=${owner}`);
+    return JSON.parse(raw)?.data?.organization?.projectsV2?.nodes ?? [];
+}
 async function pickableProjects(owner) {
-    const raw = await runGh('project', 'list', '--owner', owner, '--format', 'json', '--limit', '50');
-    const data = JSON.parse(raw);
-    return (data.projects ?? []).map(p => ({
-        label: p.title,
-        description: `#${p.number}`,
-        projectNumber: p.number,
+    return (await gqlProjects(owner)).map(p => ({
+        label: p.title, description: `#${p.number}`, projectNumber: p.number,
     }));
 }
 async function fetchStatusOptions(owner, projectNumber) {
-    const raw = await runGh('project', 'field-list', String(projectNumber), '--owner', owner, '--format', 'json', '--limit', '30');
-    const data = JSON.parse(raw);
-    const field = data.fields?.find(f => f.name === 'Status' && Array.isArray(f.options));
-    return field?.options?.map(o => o.name) ?? [];
+    const userQ = 'query($l:String!,$n:Int!){user(login:$l){projectV2(number:$n){fields(first:20){nodes{...on ProjectV2SingleSelectField{name options{name}}}}}}}';
+    const orgQ = 'query($l:String!,$n:Int!){organization(login:$l){projectV2(number:$n){fields(first:20){nodes{...on ProjectV2SingleSelectField{name options{name}}}}}}}';
+    let nodes = [];
+    try {
+        const raw = await runGhFile('api', 'graphql', '-f', `query=${userQ}`, '-f', `l=${owner}`, '-F', `n=${projectNumber}`);
+        nodes = JSON.parse(raw)?.data?.user?.projectV2?.fields?.nodes ?? [];
+    }
+    catch { /* fall through */ }
+    if (nodes.length === 0) {
+        const raw = await runGhFile('api', 'graphql', '-f', `query=${orgQ}`, '-f', `l=${owner}`, '-F', `n=${projectNumber}`);
+        nodes = JSON.parse(raw)?.data?.organization?.projectV2?.fields?.nodes ?? [];
+    }
+    const statusField = nodes.find(f => f?.name === 'Status' && Array.isArray(f?.options));
+    return statusField?.options?.map(o => o.name) ?? [];
 }
 // ── Activation ────────────────────────────────────────────────────────────────
 function activate(context) {
