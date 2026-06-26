@@ -43,7 +43,7 @@ services:
       - PROJECT_STATUS_IN_PROGRESS=${PROJECT_STATUS_IN_PROGRESS:-In Progress}
       - PROJECT_STATUS_IN_REVIEW=${PROJECT_STATUS_IN_REVIEW:-In Review}
       # How often to poll the project board (seconds)
-      - POLL_INTERVAL=${POLL_INTERVAL:-60}
+      - POLL_INTERVAL=${POLL_INTERVAL:-5}
       # Optional: default git author identity
       - GIT_AUTHOR_NAME=${GIT_AUTHOR_NAME:-Agent}
       - GIT_AUTHOR_EMAIL=${GIT_AUTHOR_EMAIL:-mail@chrissewell.net}

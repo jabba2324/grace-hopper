@@ -31,7 +31,7 @@ PROJECT_NUMBER    = int(os.environ["GITHUB_PROJECT_NUMBER"])
 STATUS_TODO       = os.environ.get("PROJECT_STATUS_TODO", "Todo")
 STATUS_IN_PROGRESS = os.environ.get("PROJECT_STATUS_IN_PROGRESS", "In Progress")
 STATUS_IN_REVIEW  = os.environ.get("PROJECT_STATUS_IN_REVIEW", "In Review")
-POLL_INTERVAL     = int(os.environ.get("POLL_INTERVAL", "60"))
+POLL_INTERVAL     = int(os.environ.get("POLL_INTERVAL", "5"))
 STATE_DIR         = Path("/app/state")
 LOCK_DIR          = STATE_DIR / "active"
 

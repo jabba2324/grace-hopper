@@ -70,7 +70,7 @@ Copy `.env.example` to `.env` and fill in the values:
 | `PROJECT_STATUS_TODO` | No | Name of the todo column (default: `Todo`) |
 | `PROJECT_STATUS_IN_PROGRESS` | No | Name of the in-progress column (default: `In Progress`) |
 | `PROJECT_STATUS_IN_REVIEW` | No | Name of the in-review column (default: `In Review`) |
-| `POLL_INTERVAL` | No | Seconds between board checks (default: `60`) |
+| `POLL_INTERVAL` | No | Seconds between board checks (default: `5`) |
 | `CODE_SERVER_PASSWORD` | No | Password for the VS Code browser UI (default: `changeme`) |
 | `CODE_SERVER_PORT` | No | Port for the VS Code browser UI (default: `8080`) |
 | `GIT_AUTHOR_NAME` | No | Git commit author name (default: `Agent`) |
