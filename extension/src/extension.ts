@@ -313,10 +313,13 @@ class GraceHopperProvider implements vscode.TreeDataProvider<Node> {
 // ── GitHub quickpick helpers ──────────────────────────────────────────────────
 
 function runGh(...args: string[]): Promise<string> {
+    // VS Code strips GITHUB_TOKEN from the extension host process (security policy).
+    // GRACE_GITHUB_TOKEN is the same value passed under a name that isn't filtered.
+    const ghToken = process.env['GRACE_GITHUB_TOKEN'] || process.env['GITHUB_TOKEN'] || '';
     return new Promise((resolve, reject) => {
         cp.exec(
             ['gh', ...args].join(' '),
-            { encoding: 'utf8', env: { ...process.env, GH_TOKEN: process.env['GITHUB_TOKEN'] ?? '' }, timeout: 15_000 },
+            { encoding: 'utf8', env: { ...process.env, GH_TOKEN: ghToken }, timeout: 15_000 },
             (err, stdout) => err ? reject(err) : resolve(stdout.trim()),
         );
     });

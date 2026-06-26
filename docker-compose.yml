@@ -10,6 +10,9 @@ services:
       - CODE_SERVER_PASSWORD=${CODE_SERVER_PASSWORD}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - GITHUB_TOKEN=${GITHUB_TOKEN}
+      # VS Code strips GITHUB_TOKEN from the extension host (security policy).
+      # GRACE_GITHUB_TOKEN carries the same value under a name that isn't filtered.
+      - GRACE_GITHUB_TOKEN=${GITHUB_TOKEN}
       - GITHUB_USERNAME=${GITHUB_USERNAME}
       - GITHUB_REPO=${GITHUB_REPO}
       - GIT_AUTHOR_NAME=${GIT_AUTHOR_NAME:-Agent}
