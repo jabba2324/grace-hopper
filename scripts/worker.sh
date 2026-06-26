@@ -153,7 +153,8 @@ new)
             "$WORKSPACE" 2>&1 | tee -a "$LOGFILE"
     fi
     cd "$WORKSPACE"
-    DEFAULT_BRANCH="$(git remote show origin | awk '/HEAD branch/{print $NF}')"
+    DEFAULT_BRANCH="$(git remote show origin 2>/dev/null | awk '/HEAD branch/{print $NF}')"
+    DEFAULT_BRANCH="${DEFAULT_BRANCH:-main}"
     git checkout -b "$BRANCH" 2>&1 | tee -a "$LOGFILE" \
         || git checkout "$BRANCH" 2>&1 | tee -a "$LOGFILE"
     ;;
@@ -164,8 +165,12 @@ resume)
         log "Workspace exists — syncing branch"
         git -C "$WORKSPACE" fetch origin 2>&1 | tee -a "$LOGFILE"
         git -C "$WORKSPACE" checkout "$BRANCH" 2>&1 | tee -a "$LOGFILE"
-        git -C "$WORKSPACE" reset --hard "origin/${BRANCH}" 2>/dev/null \
-            || git -C "$WORKSPACE" reset --hard HEAD 2>&1 | tee -a "$LOGFILE"
+        # Prefer remote branch; fall back to local HEAD (branch exists but not yet pushed)
+        if git -C "$WORKSPACE" rev-parse --verify "origin/${BRANCH}" &>/dev/null; then
+            git -C "$WORKSPACE" reset --hard "origin/${BRANCH}" 2>&1 | tee -a "$LOGFILE"
+        else
+            log "origin/${BRANCH} not found — keeping local branch as-is"
+        fi
     else
         log "No workspace — cloning"
         git clone "https://${GITHUB_USERNAME}:${GITHUB_TOKEN}@github.com/${REPO_NAME_WITH_OWNER}.git" \
@@ -173,7 +178,8 @@ resume)
         git -C "$WORKSPACE" checkout "$BRANCH" 2>&1 | tee -a "$LOGFILE"
     fi
     cd "$WORKSPACE"
-    DEFAULT_BRANCH="$(git remote show origin | awk '/HEAD branch/{print $NF}')"
+    DEFAULT_BRANCH="$(git remote show origin 2>/dev/null | awk '/HEAD branch/{print $NF}')"
+    DEFAULT_BRANCH="${DEFAULT_BRANCH:-main}"
     ;;
 
 ci-fix)
@@ -190,7 +196,8 @@ ci-fix)
         git -C "$WORKSPACE" checkout "$BRANCH" 2>&1 | tee -a "$LOGFILE"
     fi
     cd "$WORKSPACE"
-    DEFAULT_BRANCH="$(git remote show origin | awk '/HEAD branch/{print $NF}')"
+    DEFAULT_BRANCH="$(git remote show origin 2>/dev/null | awk '/HEAD branch/{print $NF}')"
+    DEFAULT_BRANCH="${DEFAULT_BRANCH:-main}"
     log "Fetching CI failure logs for run ${FAILED_RUN_ID}..."
     FAILED_LOGS="$(gh run view "$FAILED_RUN_ID" \
         --repo "$REPO_NAME_WITH_OWNER" --log-failed 2>/dev/null | head -400 || true)"
