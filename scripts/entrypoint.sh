@@ -3,6 +3,9 @@ set -euo pipefail
 
 required_vars=(
     ANTHROPIC_API_KEY
+    ANTHROPIC_ENVIRONMENT_KEY
+    ANTHROPIC_ENVIRONMENT_ID
+    AGENT_ID
     GITHUB_TOKEN
     GITHUB_USERNAME
 )
@@ -15,21 +18,7 @@ done
 
 source /app/scripts/setup_auth.sh
 
-# Ensure dangerouslySkipPermissions is set without overwriting other prefs
-# (theme choices etc. are stored here and should survive container restarts)
-mkdir -p /home/agent/.claude
-python3 - <<'PY'
-import json, pathlib
-f = pathlib.Path('/home/agent/.claude/settings.json')
-s = json.loads(f.read_text()) if f.exists() else {}
-s['dangerouslySkipPermissions'] = True
-s['autoUpdates'] = False   # version is managed via Docker image
-f.write_text(json.dumps(s, indent=2))
-PY
-
 # Pull the latest ponytail on every startup and load it as global Claude context.
-# We use CLAUDE.md rather than the plugin install because claude runs in -p
-# (non-interactive) mode, which doesn't fire plugin lifecycle hooks.
 PONYTAIL_DIR="/home/agent/.ponytail"
 echo "Fetching latest ponytail..."
 if [[ -d "$PONYTAIL_DIR/.git" ]]; then
@@ -37,7 +26,18 @@ if [[ -d "$PONYTAIL_DIR/.git" ]]; then
 else
     git clone --depth=1 https://github.com/DietrichGebert/ponytail.git "$PONYTAIL_DIR"
 fi
+mkdir -p /home/agent/.claude
 cp "$PONYTAIL_DIR/AGENTS.md" /home/agent/.claude/CLAUDE.md
+
+# Start the Managed Agents environment worker (handles bash/file tool calls).
+echo "Starting environment worker..."
+python3 /app/scripts/environment_worker.py &
+ENV_WORKER_PID=$!
+
+cleanup() {
+    kill "$ENV_WORKER_PID" 2>/dev/null || true
+}
+trap cleanup EXIT
 
 echo "Agent starting — polling every ${POLL_INTERVAL:-60}s"
 exec python3 /app/scripts/poll_projects.py

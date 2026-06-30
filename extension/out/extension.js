@@ -27,23 +27,7 @@ function liveStatus(task) {
     return task.status;
 }
 function latestSessionId(task) {
-    if (task.sessionId)
-        return task.sessionId;
-    const workspacePath = task.workspacePath;
-    if (!workspacePath)
-        return undefined;
-    const slug = workspacePath.replace(/\//g, '-');
-    const dir = path.join(CLAUDE_HOME, 'projects', slug);
-    try {
-        const files = fs.readdirSync(dir)
-            .filter(f => f.endsWith('.jsonl'))
-            .map(f => ({ name: f, mtime: fs.statSync(path.join(dir, f)).mtimeMs }))
-            .sort((a, b) => b.mtime - a.mtime);
-        return files[0]?.name.replace('.jsonl', '');
-    }
-    catch {
-        return undefined;
-    }
+    return task.sessionId;
 }
 function getCurrentBranch(workspacePath) {
     try {
@@ -154,11 +138,12 @@ class TaskNode extends vscode.TreeItem {
         this.task = task;
         this.description = STATUS_LABEL[task.status];
         this.tooltip = `${task.title}\n${task.repo} · ${task.type}`;
-        this.contextValue = task.status === 'running' ? 'runningTask'
+        const base = task.status === 'running' ? 'runningTask'
             : task.status === 'paused' ? 'pausedTask'
                 : task.status === 'failed' ? 'failedTask'
                     : task.logPath ? 'completedTask'
                         : 'task';
+        this.contextValue = base + (task.sessionId ? 'WithSession' : '');
     }
 }
 class DetailNode extends vscode.TreeItem {
@@ -201,14 +186,13 @@ function buildDetails(task) {
     if (task.failedRunId) {
         items.push(new DetailNode('Failed Run', task.failedRunId));
     }
-    if (task.logPath && fs.existsSync(task.logPath)) {
-        const node = new DetailNode('Tail Logs', path.basename(task.logPath));
+    if (task.sessionId) {
+        const node = new DetailNode('Watch', 'stream the live agent conversation');
         node.command = {
-            command: 'graceHopper.tailLogs',
-            title: 'Tail Logs',
-            arguments: [task.logPath, task.title],
+            command: 'graceHopper.openClaude',
+            title: 'Watch',
+            arguments: [new TaskNode(task)],
         };
-        node.tooltip = task.logPath;
         items.push(node);
     }
     if (task.status === 'running') {
@@ -319,14 +303,16 @@ async function fetchStatusOptions(owner, projectNumber) {
 function activate(context) {
     out = vscode.window.createOutputChannel('Grace Hopper');
     out.appendLine(`Activated — tasks file: ${TASKS_FILE}`);
-    // Open a Claude terminal if a session was queued before a workspace reload
+    // Open a session terminal if one was queued before a workspace reload
     if (fs.existsSync(PENDING_CLAUDE)) {
         try {
             const { workspacePath, sessionId } = JSON.parse(fs.readFileSync(PENDING_CLAUDE, 'utf8'));
             fs.unlinkSync(PENDING_CLAUDE);
-            const cmd = sessionId ? `claude --resume ${sessionId}` : `claude`;
+            const cmd = sessionId
+                ? `python3 /app/scripts/attach_session.py ${sessionId}`
+                : `claude`;
             const terminal = vscode.window.createTerminal({
-                name: `Claude — ${path.basename(workspacePath)}`,
+                name: `Agent — ${path.basename(workspacePath)}`,
                 location: vscode.TerminalLocation.Panel,
                 cwd: workspacePath,
             });
@@ -334,7 +320,7 @@ function activate(context) {
             terminal.show();
         }
         catch (e) {
-            out.appendLine(`Failed to resume pending Claude session: ${e}`);
+            out.appendLine(`Failed to open session terminal: ${e}`);
         }
     }
     const provider = new GraceHopperProvider();
@@ -461,7 +447,9 @@ function activate(context) {
             name,
             location: vscode.TerminalLocation.Panel,
         });
-        terminal.sendText(`tail -f "${logPath}"`);
+        // -n +1 starts from line 1 so the full history is always visible,
+        // not just the last 10 lines.
+        terminal.sendText(`tail -n +1 -f "${logPath}"`);
         terminal.show();
     }), vscode.commands.registerCommand('graceHopper.openClaude', (arg) => {
         const task = arg instanceof TaskNode ? arg.task : undefined;
@@ -471,8 +459,28 @@ function activate(context) {
             return;
         }
         const sessionId = latestSessionId(task);
-        fs.writeFileSync(PENDING_CLAUDE, JSON.stringify({ workspacePath, sessionId }));
-        vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(workspacePath), { forceNewWindow: false });
+        if (!sessionId) {
+            const label = task.title || `#${task.issueNumber}`;
+            vscode.window.showWarningMessage(`No agent session found for "${label}" — the task may not have started yet.`);
+            return;
+        }
+        const cmd = `python3 /app/scripts/attach_session.py ${sessionId}`;
+        const alreadyOpen = (vscode.workspace.workspaceFolders ?? [])
+            .some(f => f.uri.fsPath === workspacePath);
+        if (alreadyOpen) {
+            const terminal = vscode.window.createTerminal({
+                name: `Agent — ${path.basename(workspacePath)}`,
+                location: vscode.TerminalLocation.Panel,
+                cwd: workspacePath,
+            });
+            terminal.sendText(cmd);
+            terminal.show();
+            vscode.commands.executeCommand('workbench.view.explorer');
+        }
+        else {
+            fs.writeFileSync(PENDING_CLAUDE, JSON.stringify({ workspacePath, sessionId }));
+            vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(workspacePath), { forceNewWindow: false });
+        }
     }));
     try {
         const tasksWatcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(vscode.Uri.file(STATE_DIR), 'tasks.json'));

@@ -52,14 +52,9 @@
         "icon": "$(debug-continue)"
       },
       {
-        "command": "graceHopper.tailLogs",
-        "title": "Tail Logs",
-        "icon": "$(output)"
-      },
-      {
         "command": "graceHopper.openClaude",
         "title": "Open Claude",
-        "icon": "$(sparkle)"
+        "icon": "$(terminal)"
       },
       {
         "command": "graceHopper.addRepo",
@@ -98,28 +93,23 @@
         },
         {
           "command": "graceHopper.pauseTask",
-          "when": "view == graceHopper && viewItem == runningTask",
+          "when": "view == graceHopper && viewItem =~ /runningTask/",
           "group": "inline@1"
         },
         {
           "command": "graceHopper.resumeTask",
-          "when": "view == graceHopper && viewItem == pausedTask",
+          "when": "view == graceHopper && viewItem =~ /pausedTask/",
           "group": "inline@1"
         },
         {
           "command": "graceHopper.resumeTask",
-          "when": "view == graceHopper && viewItem == failedTask",
+          "when": "view == graceHopper && viewItem =~ /failedTask/",
           "group": "inline@1"
-        },
-        {
-          "command": "graceHopper.tailLogs",
-          "when": "view == graceHopper && viewItem =~ /Task/",
-          "group": "inline@2"
         },
         {
           "command": "graceHopper.openClaude",
-          "when": "view == graceHopper && viewItem =~ /Task/ && viewItem != runningTask",
-          "group": "inline@3"
+          "when": "view == graceHopper && viewItem =~ /WithSession/",
+          "group": "inline@2"
         }
       ]
     }

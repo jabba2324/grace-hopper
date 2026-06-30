@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Unified worker — handles new tasks, resumes, and CI fixes.
-Replaces worker.sh. Called by poll_projects.py via subprocess.Popen.
+Called by poll_projects.py via subprocess.Popen.
 
 Required env vars (set by poll_projects.py):
   TASK_MODE               new | resume | ci-fix
@@ -11,6 +11,11 @@ Required env vars (set by poll_projects.py):
   ISSUE_BODY              Issue body
   PROJECT_ID, ITEM_ID, STATUS_FIELD_ID   for board updates
 
+Global env vars (from .env):
+  ANTHROPIC_API_KEY       standard Anthropic API key
+  AGENT_ID                agent_... (from setup_agent.py)
+  ANTHROPIC_ENVIRONMENT_ID  env_... (from setup_agent.py)
+
 Mode-specific:
   resume:  PR_BRANCH, PREV_SESSION_ID (optional)
   ci-fix:  PR_NUMBER, PR_BRANCH, FAILED_RUN_ID, PREV_SESSION_ID (optional)
@@ -19,12 +24,15 @@ import json
 import logging
 import os
 import re
+import signal
 import subprocess
 import sys
-import tempfile
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from textwrap import dedent
+
+import anthropic  # pip install anthropic
 
 sys.path.insert(0, '/app/scripts')
 import state as task_state
@@ -45,8 +53,12 @@ PROJECT_ID    = os.environ.get('PROJECT_ID', '')
 ITEM_ID       = os.environ.get('ITEM_ID', '')
 STATUS_FIELD  = os.environ.get('STATUS_FIELD_ID', '')
 IN_REVIEW     = os.environ.get('PROJECT_STATUS_IN_REVIEW', 'In Review')
-CLAUDE_MODEL  = os.environ.get('CLAUDE_MODEL', 'claude-sonnet-4-6')
-GH_USER       = os.environ.get('GITHUB_USERNAME', '')
+CLAUDE_MODEL   = os.environ.get('CLAUDE_MODEL', 'claude-opus-4-8')
+GH_USER        = os.environ.get('GITHUB_USERNAME', '')
+AGENT_ID       = os.environ['AGENT_ID']
+ENVIRONMENT_ID = os.environ['ANTHROPIC_ENVIRONMENT_ID']
+
+client = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY from env
 
 REPO_NAME  = REPO_NWO.split('/')[-1]
 WORKSPACE  = Path(f'/workspaces/{REPO_NAME}-{ISSUE_NUM}')
@@ -56,8 +68,7 @@ LOG_DIR    = STATE_DIR / 'logs'
 LOCKFILE   = LOCK_DIR / f'issue-{ISSUE_NUM}.lock'
 STATE_TYPE = 'task' if MODE in ('new', 'resume') else MODE
 
-ts = datetime.now().strftime('%Y%m%d-%H%M%S')
-LOGFILE = LOG_DIR / f'{MODE}-issue-{ISSUE_NUM}-{ts}.log'
+LOGFILE = LOG_DIR / f'issue-{ISSUE_NUM}.log'
 
 # ── Logging (file + stdout) ───────────────────────────────────────────────────
 
@@ -207,7 +218,8 @@ def write_claude_md(status: str) -> None:
 
             ## Continuing this work
 
-                claude --dangerously-skip-permissions
+            Move this ticket back to "In Progress" on the GitHub project board
+            and the agent will automatically resume where it left off.
         """))
     except Exception as exc:
         log.warning('write_claude_md failed: %s', exc)
@@ -283,6 +295,12 @@ def build_prompt(failed_logs: str = '') -> str:
         return dedent(f"""\
             You are an autonomous software engineer. Your task is described in a GitHub issue.
 
+            ## Workspace
+
+            Working directory: `/workspaces/{REPO_NAME}-{ISSUE_NUM}`
+            The repository has already been cloned and a feature branch checked out.
+            Start all work from this directory.
+
             ## Issue #{ISSUE_NUM}: {ISSUE_TITLE}
 
             {_ind(ISSUE_BODY)}
@@ -309,7 +327,13 @@ def build_prompt(failed_logs: str = '') -> str:
     if MODE == 'resume':
         if PREV_SESSION:
             return dedent(f"""\
-                You are resuming issue #{ISSUE_NUM}: {ISSUE_TITLE}. You were interrupted — continue from where you left off. If the work is already complete, verify tests pass and ensure everything is committed.
+                You are resuming issue #{ISSUE_NUM}: {ISSUE_TITLE}.
+
+                ## Workspace
+
+                Working directory: `/workspaces/{REPO_NAME}-{ISSUE_NUM}`
+
+                You were interrupted — continue from where you left off. If the work is already complete, verify tests pass and ensure everything is committed.
 
                 Do NOT create a pull request — the system handles that automatically.
                 Do not ask for confirmation — work autonomously to completion.
@@ -321,6 +345,10 @@ def build_prompt(failed_logs: str = '') -> str:
         status  = git('status', '--short', capture=True) or '  (working tree is clean)'
         return dedent(f"""\
             You are resuming an in-progress task that was interrupted.
+
+            ## Workspace
+
+            Working directory: `/workspaces/{REPO_NAME}-{ISSUE_NUM}`
 
             ## Issue #{ISSUE_NUM}: {ISSUE_TITLE}
 
@@ -359,7 +387,11 @@ def build_prompt(failed_logs: str = '') -> str:
         pr_num = ctx['pr_number']
         if PREV_SESSION:
             return dedent(f"""\
-                CI is failing on PR #{pr_num} (run {FAILED_RUN}). Fix the failures.
+                CI is still failing on PR #{pr_num} (run {FAILED_RUN}). Fix the failures.
+
+                ## Workspace
+
+                Working directory: `/workspaces/{REPO_NAME}-{ISSUE_NUM}`
 
                 ```
                 {_ind(failed_logs)}
@@ -370,6 +402,10 @@ def build_prompt(failed_logs: str = '') -> str:
             """)
         return dedent(f"""\
             You are fixing a failing CI pipeline on PR #{pr_num}.
+
+            ## Workspace
+
+            Working directory: `/workspaces/{REPO_NAME}-{ISSUE_NUM}`
 
             ## Issue #{ISSUE_NUM}: {ISSUE_TITLE}
 
@@ -402,25 +438,126 @@ def build_prompt(failed_logs: str = '') -> str:
 
 # ── Claude runner ─────────────────────────────────────────────────────────────
 
+def _pause_watcher(session_id: str, paused: list, stop: threading.Event) -> None:
+    """Background thread: sends user.interrupt when the pause file appears."""
+    pause_file = STATE_DIR / f'pause-{ISSUE_NUM}'
+    while not stop.is_set():
+        if pause_file.exists():
+            log.info('=== Pause requested — interrupting session ===')
+            try:
+                client.beta.sessions.events.send(
+                    session_id=session_id,
+                    events=[{'type': 'user.interrupt'}],
+                )
+                paused.append(True)
+                pause_file.unlink(missing_ok=True)
+            except Exception as exc:
+                log.warning('Failed to send interrupt: %s', exc)
+            return
+        stop.wait(timeout=1.0)
+
+
 def run_claude(prompt: str) -> int:
-    fd, session_path = tempfile.mkstemp()
-    os.close(fd)
-    session_file = Path(session_path)
-    env = {
-        **os.environ,
-        'CLAUDE_PROMPT':         prompt,
-        'CLAUDE_LOGFILE':        str(LOGFILE),
-        'CLAUDE_MODEL':          CLAUDE_MODEL,
-        'CLAUDE_CWD':            str(WORKSPACE),
-        'CLAUDE_RESUME_SESSION': PREV_SESSION,
-        'CLAUDE_PAUSE_FILE':     f'/app/state/pause-{ISSUE_NUM}',
-        'CLAUDE_SESSION_FILE':   str(session_file),
-    }
-    result = subprocess.run(['node', '/app/scripts/run_claude.js'], env=env)
-    if session_file.exists():
-        ctx['session_id'] = session_file.read_text().strip()
-        session_file.unlink(missing_ok=True)
-    return result.returncode
+    """
+    Run a Managed Agents session with the given prompt.
+    Returns 0 (success), 1 (error), 2 (paused).
+    Session ID is written to ctx['session_id'] before the stream starts.
+    """
+    session_id = PREV_SESSION
+
+    # Validate or discard a previous session.
+    if session_id:
+        try:
+            sess = client.beta.sessions.retrieve(session_id)
+            if sess.status in ('terminated', 'archived'):
+                log.info('Previous session %s is %s — creating new session', session_id, sess.status)
+                session_id = ''
+        except Exception as exc:
+            log.warning('Could not retrieve session %s (%s) — creating new', session_id, exc)
+            session_id = ''
+
+    # Create a new session when needed.
+    if not session_id:
+        try:
+            sess = client.beta.sessions.create(
+                agent=AGENT_ID,
+                environment_id=ENVIRONMENT_ID,
+            )
+            session_id = sess.id
+            log.info('=== New session %s ===', session_id)
+        except Exception as exc:
+            log.error('Failed to create session: %s', exc)
+            return 1
+    else:
+        log.info('=== Resuming session %s ===', session_id)
+
+    ctx['session_id'] = session_id
+    save_state('running')  # persist session ID so the extension can connect immediately
+
+    paused: list = []
+    stop_event = threading.Event()
+    watcher = threading.Thread(
+        target=_pause_watcher,
+        args=(session_id, paused, stop_event),
+        daemon=True,
+    )
+    watcher.start()
+
+    try:
+        # Stream-first: open stream then send the message so no early events are missed.
+        with client.beta.sessions.events.stream(session_id=session_id) as stream:
+            message_events = [{
+                'type': 'user.message',
+                'content': [{'type': 'text', 'text': prompt}],
+            }]
+            waiting_for_unblock = False
+            try:
+                client.beta.sessions.events.send(
+                    session_id=session_id,
+                    events=message_events,
+                )
+            except anthropic.BadRequestError as exc:
+                if 'waiting on responses' in str(exc):
+                    # Session is stuck waiting for a tool result from a crashed env-worker.
+                    # Send interrupt to unblock it, then wait for idle before re-sending.
+                    log.warning('Session blocked on pending tool result — interrupting to unblock')
+                    client.beta.sessions.events.send(
+                        session_id=session_id,
+                        events=[{'type': 'user.interrupt'}],
+                    )
+                    waiting_for_unblock = True
+                else:
+                    raise
+            for event in stream:
+                if waiting_for_unblock and event.type == 'session.status_idle':
+                    client.beta.sessions.events.send(
+                        session_id=session_id,
+                        events=message_events,
+                    )
+                    waiting_for_unblock = False
+                    continue
+                if event.type == 'agent.message':
+                    for block in event.content:
+                        if block.type == 'text' and block.text:
+                            log.info(block.text)
+                elif event.type == 'agent.tool_use':
+                    log.info('[%s] %s', event.name, str(event.input)[:200])
+                elif event.type == 'session.status_idle':
+                    stop_reason = getattr(event, 'stop_reason', None)
+                    reason_type = getattr(stop_reason, 'type', None) if stop_reason else None
+                    if reason_type == 'requires_action':
+                        continue
+                    break
+                elif event.type == 'session.status_terminated':
+                    log.error('Session terminated unexpectedly')
+                    return 1
+    except Exception as exc:
+        log.error('Session stream error: %s', exc)
+        return 1
+    finally:
+        stop_event.set()
+
+    return 2 if paused else 0
 
 # ── Push + PR + board update ──────────────────────────────────────────────────
 
@@ -490,7 +627,20 @@ def push_and_pr() -> None:
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
+_sigterm = threading.Event()
+
+def _handle_sigterm(signum, frame):
+    _sigterm.set()
+
+signal.signal(signal.SIGTERM, _handle_sigterm)
+
+
 def main() -> None:
+    started = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+    log.info('')
+    log.info('━' * 60)
+    log.info('  %s  |  issue #%s  |  %s', started, ISSUE_NUM, MODE)
+    log.info('━' * 60)
     log.info('=== [%s] issue #%s: %s ===', MODE, ISSUE_NUM, ISSUE_TITLE)
     log.info('=== Repo: %s ===', REPO_NWO)
 
@@ -530,6 +680,9 @@ def main() -> None:
     except Exception as exc:
         log.error('=== ERROR: %s ===', exc)
     finally:
+        if _sigterm.is_set() and status == 'failed':
+            log.info('=== Shutdown signal received — saving as paused for auto-resume ===')
+            status = 'paused'
         write_claude_md(status)
         save_state(status)
         LOCKFILE.unlink(missing_ok=True)

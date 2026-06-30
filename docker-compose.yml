@@ -28,11 +28,13 @@ services:
     image: grace-hopper
     environment:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
-      # Model to use — balance cost vs capability:
-      #   claude-haiku-4-5-20251001   cheapest, fast, good for most tasks
-      #   claude-sonnet-4-6           mid-range (default)
-      #   claude-opus-4-8             most capable, most expensive
-      - CLAUDE_MODEL=${CLAUDE_MODEL:-claude-sonnet-4-6}
+      # Managed Agents — created once via scripts/setup_agent.py
+      - ANTHROPIC_ENVIRONMENT_ID=${ANTHROPIC_ENVIRONMENT_ID}
+      - ANTHROPIC_ENVIRONMENT_KEY=${ANTHROPIC_ENVIRONMENT_KEY}
+      - AGENT_ID=${AGENT_ID}
+      # Model baked into the agent at creation time (see setup_agent.py).
+      # Change here only takes effect when the agent is recreated.
+      - CLAUDE_MODEL=${CLAUDE_MODEL:-claude-opus-4-8}
       # Ponytail lazy-dev mode: lite | full | ultra | off
       - PONYTAIL_DEFAULT_MODE=${PONYTAIL_DEFAULT_MODE:-full}
       - GITHUB_TOKEN=${GITHUB_TOKEN}
