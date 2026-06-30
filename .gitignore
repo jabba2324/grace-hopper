@@ -20,3 +20,9 @@ claude-home/
 __pycache__/
 *.pyc
 *.pyo
+
+# Extension build artefacts
+extension/out/
+extension/node_modules/
+extension/package-lock.json
+extension/*.vsix
