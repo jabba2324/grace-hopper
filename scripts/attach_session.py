@@ -11,8 +11,11 @@ Usage:
 """
 import sys
 import threading
+from pathlib import Path
 
 from anthropic import Anthropic, BadRequestError
+
+STATE_DIR = Path('/app/state')
 
 # ── ANSI colours ─────────────────────────────────────────────────────────────
 
@@ -118,9 +121,16 @@ def send_message(client: Anthropic, session_id: str, text: str,
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
-def main(session_id: str) -> None:
+def pause_agent(issue_num: int) -> None:
+    pause_file = STATE_DIR / f'pause-{issue_num}'
+    pause_file.touch()
+    _print(f'{YELLOW}Pause signal sent — agent will stop within ~5 seconds{RESET}')
+
+
+def main(session_id: str, issue_num: int | None = None) -> None:
+    pause_hint = '  ·  /pause to pause agent' if issue_num else ''
     print(f'\n{BOLD}Grace Hopper — {session_id}{RESET}')
-    print(f'{DIM}Type a message and Enter to send  ·  Ctrl+C to exit{RESET}\n')
+    print(f'{DIM}Type a message and Enter to send{pause_hint}  ·  Ctrl+C to exit{RESET}\n')
 
     client = Anthropic()
 
@@ -163,6 +173,12 @@ def main(session_id: str) -> None:
         text = line.rstrip('\n').strip()
         if not text:
             continue
+        if text == '/pause':
+            if issue_num:
+                pause_agent(issue_num)
+            else:
+                _print(f'{YELLOW}Pause unavailable — issue number not known{RESET}')
+            continue
         try:
             send_message(client, session_id, text, idle)
         except Exception as exc:
@@ -174,9 +190,10 @@ def main(session_id: str) -> None:
 
 if __name__ == '__main__':
     if len(sys.argv) < 2:
-        print('Usage: attach_session.py <session_id>', file=sys.stderr)
+        print('Usage: attach_session.py <session_id> [issue_num]', file=sys.stderr)
         sys.exit(1)
+    _issue = int(sys.argv[2]) if len(sys.argv) > 2 else None
     try:
-        main(sys.argv[1])
+        main(sys.argv[1], _issue)
     except KeyboardInterrupt:
         print('\nExiting.')

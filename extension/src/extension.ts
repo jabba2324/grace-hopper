@@ -275,6 +275,8 @@ class GraceHopperProvider implements vscode.TreeDataProvider<Node> {
         this._onChange.fire();
     }
 
+    getTasks(): Task[] { return this.tasks; }
+
     getTreeItem(el: Node): vscode.TreeItem { return el; }
 
     getChildren(element?: Node): Node[] {
@@ -385,6 +387,18 @@ export function activate(context: vscode.ExtensionContext): void {
         } catch (e) { out.appendLine(`Failed to open session terminal: ${e}`); }
     }
 
+    const pauseBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
+    pauseBar.command  = 'graceHopper.pauseRunning';
+    pauseBar.text     = '$(debug-pause) Pause Agent';
+    pauseBar.tooltip  = 'Pause the running Grace Hopper agent';
+    pauseBar.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
+    context.subscriptions.push(pauseBar);
+
+    function updatePauseBar(tasks: Task[]): void {
+        const running = tasks.filter(t => liveStatus(t) === 'running');
+        if (running.length > 0) { pauseBar.show(); } else { pauseBar.hide(); }
+    }
+
     const provider = new GraceHopperProvider();
     provider.refresh();
 
@@ -393,6 +407,21 @@ export function activate(context: vscode.ExtensionContext): void {
         vscode.window.registerTreeDataProvider('graceHopper', provider),
 
         vscode.commands.registerCommand('graceHopper.refresh', () => provider.refresh()),
+
+        vscode.commands.registerCommand('graceHopper.pauseRunning', async () => {
+            const tasks = loadTasks().filter(t => liveStatus(t) === 'running');
+            if (tasks.length === 0) {
+                vscode.window.showInformationMessage('No agent is currently running.');
+                return;
+            }
+            const task = tasks.length === 1 ? tasks[0] : await vscode.window.showQuickPick(
+                tasks.map(t => ({ label: t.title || `#${t.issueNumber}`, description: t.repo, task: t })),
+                { title: 'Pause which agent?' },
+            ).then(item => item?.task);
+            if (!task) { return; }
+            fs.writeFileSync(path.join(STATE_DIR, `pause-${task.issueNumber}`), '');
+            vscode.window.showInformationMessage(`Pausing "${task.title || `#${task.issueNumber}`}" — agent will stop within ~5 seconds`);
+        }),
 
         vscode.commands.registerCommand('graceHopper.addRepo', async () => {
             // Step 1 — pick a repo (spinner shows while gh fetches)
@@ -561,7 +590,7 @@ export function activate(context: vscode.ExtensionContext): void {
                     vscode.window.showWarningMessage(`No agent session found for "${label}" — the task may not have started yet.`);
                     return;
                 }
-                const cmd = `python3 /app/scripts/attach_session.py ${sessionId}`;
+                const cmd = `python3 /app/scripts/attach_session.py ${sessionId} ${task.issueNumber}`;
                 const alreadyOpen = (vscode.workspace.workspaceFolders ?? [])
                     .some(f => f.uri.fsPath === workspacePath);
                 if (alreadyOpen) {
@@ -604,8 +633,10 @@ export function activate(context: vscode.ExtensionContext): void {
         context.subscriptions.push(tasksWatcher, reposWatcher, lockWatcher);
     } catch (e) { out.appendLine(`Watcher error: ${e}`); }
 
-    const timer = setInterval(() => provider.refresh(), 2_000);
+    const refreshAll = () => { provider.refresh(); updatePauseBar(provider.getTasks()); };
+    const timer = setInterval(refreshAll, 2_000);
     context.subscriptions.push({ dispose: () => clearInterval(timer) });
+    refreshAll();
 }
 
 export function deactivate(): void {}
