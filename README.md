@@ -1,8 +1,6 @@
 # Grace Hopper
 
-An autonomous software engineering agent that runs on Docker. It watches one or more GitHub Projects v2 boards for tickets, clones the relevant repositories, implements the changes using Claude Code, and raises pull requests — all without human intervention.
-
-Runs anywhere Docker runs: your laptop, a VPS, a cloud VM, or CI.
+An autonomous software engineering agent that watches GitHub Projects v2 boards for tickets, clones the relevant repositories, implements the changes using Claude, and raises pull requests — all without human intervention.
 
 ## How it works
 
@@ -10,18 +8,33 @@ Every poll cycle Grace scans all board items and responds to their state:
 
 **Todo** → clone the repo, create a branch, run Claude, push, open a PR, move to **In Progress → In Review**
 
-**In Progress (no active process)** → task was interrupted; Grace resumes it by checking out the branch and giving Claude a summary of what was already done
+**In Progress (idle)** → task was interrupted; Grace resumes it on the same branch with a summary of what was already done
 
-**In Review (CI failing)** → fetch the failure logs, run Claude to fix them, push, CI reruns automatically. Grace keeps iterating until CI is green.
+**In Review (CI failing)** → fetch the failure logs, run Claude to fix them, push, CI reruns. Grace iterates until CI is green.
 
-## Prerequisites
-
-- Docker and Docker Compose
-- A [GitHub Personal Access Token](#github-token) (classic)
-- An [Anthropic API key](https://console.anthropic.com)
-- A GitHub Projects v2 board linked to a repository, with a **Status** single-select field
+---
 
 ## Setup
+
+Grace Hopper runs in two modes — pick one:
+
+| | Local (self-hosted) | GitHub Codespaces |
+|---|---|---|
+| **VS Code** | code-server in browser (`localhost:8080`) | Native Codespaces VS Code |
+| **Agent** | Docker Compose | Background process in the Codespace |
+| **Secrets** | `.env` file | Codespaces Secrets in GitHub settings |
+| **Best for** | VPS, home server, always-on | Occasional use, no infrastructure |
+
+---
+
+## Option A — Local (Docker Compose)
+
+### Prerequisites
+
+- Docker and Docker Compose
+- A GitHub Personal Access Token (classic)
+- An Anthropic API key
+- A GitHub Projects v2 board with a **Status** single-select field
 
 ### 1. Clone and configure
 
@@ -31,7 +44,7 @@ cd grace-hopper
 cp .env.example .env
 ```
 
-Edit `.env` with your credentials (see [Configuration](#configuration) below).
+Edit `.env` — see [Environment variables](#environment-variables) below.
 
 ### 2. GitHub Token
 
@@ -43,197 +56,231 @@ Required scopes:
 |---|---|
 | `repo` | Clone repositories, push branches, open PRs |
 | `project` | Read and update project board status |
-| `workflow` | Push branches that contain GitHub Actions workflows |
+| `workflow` | Push branches containing GitHub Actions workflows |
 
-> Fine-grained tokens do not support GitHub Projects v2 and will not work.
+> Fine-grained tokens do not support GitHub Projects v2.
 
-### 3. Build and run
+### 3. Managed Agents setup
+
+Grace uses the [Anthropic Managed Agents API](https://docs.anthropic.com/en/docs/agents) to run Claude sessions. Run the setup script once to create an agent and environment:
+
+```bash
+pip install anthropic
+ANTHROPIC_API_KEY=your-key python3 scripts/setup_agent.py
+```
+
+Copy the output values (`AGENT_ID`, `ANTHROPIC_ENVIRONMENT_ID`, `ANTHROPIC_ENVIRONMENT_KEY`) into `.env`.
+
+### 4. Build and run
 
 ```bash
 docker compose up -d --build
 docker compose logs -f
 ```
 
-### 4. Add repositories
+### 5. Add repositories
 
-Open `http://localhost:8080` in your browser, then open the **Grace Hopper** panel in the activity bar.
+Open `http://localhost:8080`, then open the **Grace Hopper** panel in the activity bar.
 
-Click **+** (Add Repository) in the panel toolbar and follow the three-step flow:
-
+Click **+** and follow the three-step flow:
 1. Select a GitHub repository
 2. Select the project board linked to it
-3. Map the board's Status column names to Grace's three roles
+3. Map the board's Status column names to Grace's three roles (Todo / In Progress / In Review)
 
-You can add as many repositories and project boards as you like. Configuration is saved to `state/repos.json` and takes effect on the next poll cycle.
+---
 
-## Configuration
+## Option B — GitHub Codespaces
 
-### Environment variables
+No infrastructure needed. The agent runs as a background process inside the Codespace, and the Grace Hopper extension appears in the native Codespaces VS Code sidebar.
 
-Copy `.env.example` to `.env` and fill in the values:
+### 1. Set Codespaces Secrets
+
+Go to `github.com → Settings → Codespaces → Secrets` and add:
+
+| Secret | Description |
+|---|---|
+| `ANTHROPIC_API_KEY` | Anthropic API key |
+| `ANTHROPIC_ENVIRONMENT_KEY` | Managed Agents environment key (`sk-ant-oat01-...`) |
+| `ANTHROPIC_ENVIRONMENT_ID` | Managed Agents environment ID (`env_...`) |
+| `AGENT_ID` | Managed Agents agent ID (`agent_...`) |
+| `GITHUB_USERNAME` | Your GitHub username |
+
+> `GITHUB_TOKEN` is provided automatically by Codespaces — you do not need to set it.
+
+If you haven't run the Managed Agents setup yet, see [step 3 above](#3-managed-agents-setup).
+
+### 2. Open a Codespace
+
+On the repository page, click **Code → Codespaces → Create codespace on main**.
+
+On first launch, Codespaces will:
+- Pull the pre-built `grace-hopper` image from GHCR
+- Install the Grace Hopper VS Code extension into the sidebar
+- Start `poll_projects.py` and `environment_worker.py` in the background
+
+> The GHCR image is rebuilt automatically on every push to `main` via the included GitHub Actions workflow.
+
+### 3. Add repositories
+
+Open the **Grace Hopper** panel in the VS Code activity bar and click **+** — same flow as the local setup.
+
+---
+
+## Environment variables
 
 | Variable | Required | Description |
 |---|---|---|
 | `ANTHROPIC_API_KEY` | Yes | Anthropic API key |
+| `ANTHROPIC_ENVIRONMENT_KEY` | Yes | Managed Agents environment key |
+| `ANTHROPIC_ENVIRONMENT_ID` | Yes | Managed Agents environment ID |
+| `AGENT_ID` | Yes | Managed Agents agent ID |
 | `GITHUB_TOKEN` | Yes | Classic PAT with `repo` + `project` + `workflow` scopes |
 | `GITHUB_USERNAME` | Yes | Your GitHub username |
-| `CLAUDE_MODEL` | No | Model to use (default: `claude-sonnet-4-6`) |
+| `CLAUDE_MODEL` | No | Model to use (default: `claude-opus-4-8`) |
 | `PONYTAIL_DEFAULT_MODE` | No | Ponytail mode: `lite`, `full` (default), `ultra`, `off` |
 | `POLL_INTERVAL` | No | Seconds between board checks (default: `5`) |
-| `CODE_SERVER_PASSWORD` | No | Password for the VS Code browser UI (default: `changeme`) |
-| `CODE_SERVER_PORT` | No | Port for the VS Code browser UI (default: `8080`) |
+| `CODE_SERVER_PASSWORD` | No | Password for the browser VS Code UI (default: `changeme`) — local only |
+| `CODE_SERVER_PORT` | No | Port for the browser VS Code UI (default: `8080`) — local only |
 | `GIT_AUTHOR_NAME` | No | Git commit author name (default: `Agent`) |
 | `GIT_AUTHOR_EMAIL` | No | Git commit author email |
 
-### Repository setup
+---
 
-Repositories and project boards are configured from the Grace Hopper VS Code panel — no env vars needed.
+## Grace Hopper extension
 
-1. Open the Grace Hopper panel in the VS Code activity bar
-2. Click **Add Repository** (`+` icon in the panel toolbar)
-3. Select a GitHub repository from the dropdown
-4. Select the project board to watch
-5. Map the board's Status column names to Grace's three roles (Todo / In Progress / In Review) — the actual column names from your project are shown so they don't need to match any default
-
-Configuration is stored in `state/repos.json` and is shared between the poller, the worker, and the VS Code extension. You can monitor multiple repositories and project boards simultaneously.
-
-**Single-repo fallback:** if `state/repos.json` is absent or empty, Grace falls back to `GITHUB_REPO` + `GITHUB_PROJECT_NUMBER` env vars (and the optional `PROJECT_STATUS_*` vars for column name overrides). This keeps existing setups working without any changes.
-
-### Choosing a model
-
-| Model | Best for |
-|---|---|
-| `claude-haiku-4-5-20251001` | Simple tasks, test coverage, documentation |
-| `claude-sonnet-4-6` | Most coding tasks (default) |
-| `claude-opus-4-8` | Complex architecture, security audits |
-
-## Project board setup
-
-Your GitHub Projects v2 board must have a **Status** single-select field with three columns representing the todo, in-progress, and in-review stages. The column names can be anything — you map them to Grace's roles when you add the repo in the VS Code panel.
-
-Write issues clearly — the title and body are passed directly to Claude as the task goal.
-
-## VS Code
-
-Grace Hopper ships two ways to interact with the agent from VS Code.
-
-### Browser UI (code-server)
-
-The `code-server` service runs VS Code in the browser, sharing the same `workspaces/` volume as the agent. When running locally, access it at:
-
-```
-http://localhost:8080
-```
-
-Use the password set in `CODE_SERVER_PASSWORD` in your `.env`.
-
-The agent's workspaces appear as folders in the file explorer. You can open a terminal and run the same tools the agent uses (`gh`, `git`, `pytest`, etc.).
-
-> **Running on a remote machine?** Either bind to localhost and SSH tunnel (`ssh -L 8080:localhost:8080 user@host`), or put code-server behind a reverse proxy with TLS (nginx, Caddy, Traefik) rather than exposing port 8080 directly.
-
-### Grace Hopper extension
-
-The Grace Hopper VS Code extension is automatically installed in code-server and provides a live task panel in the VS Code activity bar.
+The extension provides a live task panel in the VS Code activity bar, available in both local (code-server) and Codespaces modes.
 
 **What it shows:**
-- All monitored repositories as top-level nodes, each showing a task count
+- Monitored repositories as top-level nodes, each showing task count and **total token spend**
 - Tasks grouped under their repository, sorted by status
-- Per-task details: ticket link, branch, PR link, workspace path, log file
+- Per-task details: ticket, branch, PR, workspace path, **live token cost**, timestamps
 
 **Inline controls:**
-- **Pause** (running tasks) — gracefully stops the Claude process; task can be resumed by the agent or a developer
-- **Resume** (paused or failed tasks) — re-dispatches the task to the agent on the next poll
-- **Tail Logs** — opens a live log stream for that task in an output panel
-- **✦ (Claude)** (non-running tasks) — opens the workspace folder in VS Code and starts an interactive Claude Code session, resuming the agent's last conversation where possible
+- **Pause** — gracefully stops the Claude session; task can be resumed
+- **Resume / Retry** — re-dispatches the task on the next poll
+- **Watch (✦)** — opens an interactive Claude session resuming from the agent's last conversation
 - **− (Remove)** on a repository node — stops monitoring that repo
 
 **Panel toolbar:**
-- **+ (Add Repository)** — guided flow to select a repo, pick its project board, and map Status column names
-- **Rebuild State** — reconciles `tasks.json` against the live GitHub board, correcting any stale or mismatched statuses
+- **+ (Add Repository)** — guided setup: pick repo, pick project board, map Status columns
+- **Rebuild State** — reconciles `tasks.json` against the live GitHub board
 - **Refresh** — manually re-reads `tasks.json`
 
-The panel auto-refreshes every 2 seconds and watches for lock file changes so running/stale status updates appear immediately.
+The panel auto-refreshes every 2 seconds. Token spend updates live while a task is running.
+
+### Token spend
+
+Grace tracks input and output token usage per task via the Managed Agents API and displays the dollar cost inline:
+
+- **Per task**: `In Progress · $0.42` shown in the task row
+- **Per repo**: `project #2 · 18 tasks · $12.50` rolled up in the repo row
+- **Expanded view**: `Cost: $0.42 · 180k in / 42k out`
+
+Costs are calculated client-side using Anthropic's published per-model rates. Previously completed sessions are backfilled automatically on the next poll cycle.
+
+---
 
 ## Human handoff
 
-A developer can take over any paused or failed task directly from the Grace Hopper panel.
-
-Clicking ✦ on a task:
+Clicking **✦** on any task:
 1. Reloads VS Code into the task's workspace folder
-2. Opens a terminal with `claude --resume <session-id>` if prior conversation history exists, or plain `claude` for a fresh session
+2. Opens a terminal with `claude --resume <session-id>` if history exists, or plain `claude` for a fresh session
 
-Either way, Claude reads `.claude/CLAUDE.md` from the workspace root — a file Grace writes at the start and end of every task run containing the original issue goal, current branch and PR link, all commits on the branch, files changed, and uncommitted work. This gives Claude full context without needing to replay conversation history.
+Grace writes `.claude/CLAUDE.md` to the workspace root at the start and end of every run containing: the original issue goal, current branch and PR link, all commits on the branch, files changed, and uncommitted work. This gives full context without replaying conversation history.
 
-**Conversation history** is persisted to `./claude-home/` on the host (a bind mount of `~/.claude` shared between the agent and code-server containers). The agent and code-server share the same Claude state — settings, preferences, and per-workspace session files — so history written by an agent run is readable from a developer session in the browser and vice versa.
+Conversation history is persisted in `./claude-home/` (local) or `~/.claude/` (Codespaces). The agent and VS Code share the same Claude state — history written by an agent run is readable from an interactive developer session.
 
-The agent stores its Claude session ID after every run and passes it back via `--resume` when the task continues (resume or CI-fix modes), so conversation history carries across interruptions. The ✦ button uses the same session ID to open an interactive session that picks up exactly where the agent left off. If no prior session exists, it falls back to a fresh session with `.claude/CLAUDE.md` providing the task context.
+---
 
-## Ponytail integration
+## Ponytail
 
-Grace Hopper uses [Ponytail](https://github.com/DietrichGebert/ponytail) to enforce a "lazy senior developer" philosophy on every task — favouring the simplest solution that works over unnecessary abstraction or verbosity.
+Grace uses [Ponytail](https://github.com/DietrichGebert/ponytail) to enforce a "lazy senior developer" philosophy on every task. On each startup, the agent pulls the latest Ponytail and writes its instruction set to `~/.claude/CLAUDE.md`, which Claude reads as global context.
 
-On each container start, the agent pulls the latest Ponytail from GitHub and writes its instruction set (`AGENTS.md`) to `~/.claude/CLAUDE.md`. Claude Code reads this file as global context in every session, so the Ponytail decision ladder is always active without any plugin installation or slash commands.
-
-The coding ladder Ponytail enforces (in priority order):
-
-1. Skip — do nothing if the problem doesn't need code
+The coding ladder (in priority order):
+1. Skip — do nothing if it doesn't need code
 2. Reuse — use something that already exists
-3. Standard library — prefer built-ins
+3. Standard library
 4. Native platform feature
 5. Existing dependency
 6. One-liner
 7. Minimal new code as a last resort
 
+---
+
+## Project board setup
+
+Your GitHub Projects v2 board needs a **Status** single-select field with three columns representing the todo, in-progress, and in-review stages. The column names can be anything — you map them to Grace's roles when adding the repo in the VS Code panel.
+
+Write issues clearly — the title and body are passed directly to Claude as the task goal.
+
+---
+
 ## Logs and state
 
-Task logs are written to `./state/logs/` and stream to Docker logs:
-
 ```bash
+# Local
 docker compose logs -f
-tail -f state/logs/new-issue-<N>-*.log      # new task
-tail -f state/logs/resume-issue-<N>-*.log   # resumed task
-tail -f state/logs/ci-fix-issue-<N>-*.log   # CI fix
+tail -f state/logs/issue-<N>.log
 ```
 
-State in `./state/`:
+```bash
+# Codespaces
+tail -f /tmp/grace-poll.log
+tail -f /tmp/grace-env-worker.log
+tail -f /app/state/logs/issue-<N>.log
+```
+
+State directory (`./state/` local, `/app/state/` Codespaces):
 
 | File / Directory | Purpose |
 |---|---|
-| `repos.json` | Monitored repositories and project boards — written by the VS Code extension, read by the poller and worker |
-| `tasks.json` | Single source of truth — status for every task, updated by the poller and worker |
-| `active/issue-<N>.lock` | Lock file written while a worker is running; used to detect live vs. stale processes |
+| `repos.json` | Monitored repos and project boards — written by the extension |
+| `tasks.json` | Single source of truth for all task status, tokens, and metadata |
+| `active/issue-<N>.lock` | Lock file while a worker is running |
 | `logs/` | Per-task log files |
-| `pending-claude.json` | Transient — written by the ✦ button before a workspace reload, consumed by the extension on re-activation to open the Claude terminal |
+
+---
 
 ## Repository layout
 
 ```
 .
-├── Dockerfile                  # Ubuntu 24.04 + Node 22 + Python + gh CLI + Claude Code
-├── docker-compose.yml
+├── Dockerfile                  # Ubuntu 24.04 + Node 22 + Python + gh CLI + Claude
+├── docker-compose.yml          # Local: code-server + agent services
+├── .devcontainer/
+│   ├── devcontainer.json       # Codespaces config: GHCR image + extension install
+│   └── start.sh                # Codespaces startup: auth + Ponytail + agent processes
+├── .github/
+│   └── workflows/
+│       └── publish.yml         # Builds and pushes image to GHCR on push to main
 ├── requirements.txt
 ├── scripts/
-│   ├── setup_auth.sh           # Shared git/gh auth setup (sourced by both services)
-│   ├── entrypoint.sh           # Agent startup: auth + Ponytail + poller
-│   ├── code_server.sh          # code-server startup: auth + VS Code web server
-│   ├── poll_projects.py        # Single polling loop — handles Todo/In Progress/In Review
-│   ├── worker.py               # Unified worker: TASK_MODE=new|resume|ci-fix
-│   ├── run_claude.js           # Node.js runner: stream-json Claude invocation, pause/session handling
-│   ├── github.py               # Shared GitHub API helpers (gql, gh)
-│   ├── state.py                # tasks.json read/write module
-│   └── rebuild_state.py        # Reconciles tasks.json against live GitHub board (used by VS Code extension)
-├── extension/                  # Grace Hopper VS Code extension (auto-installed in code-server)
-├── workspaces/                 # Cloned repositories (Docker volume, gitignored)
-├── state/                      # Task state, logs, lockfiles (Docker volume, gitignored)
-└── claude-home/                # Shared ~/.claude for agent + code-server (bind mount, gitignored)
-                                #   Persists Claude settings, preferences, and per-workspace
-                                #   conversation history across container restarts and rebuilds.
+│   ├── setup_auth.sh           # Shared git/gh auth setup
+│   ├── entrypoint.sh           # Local agent startup
+│   ├── code_server.sh          # Local code-server startup
+│   ├── setup_agent.py          # One-time Managed Agents setup
+│   ├── poll_projects.py        # Main polling loop
+│   ├── worker.py               # Task worker (new / resume / ci-fix modes)
+│   ├── environment_worker.py   # Managed Agents environment worker
+│   ├── github.py               # GitHub API helpers
+│   ├── state.py                # tasks.json read/write
+│   ├── rebuild_state.py        # Reconcile tasks.json against GitHub
+│   └── attach_session.py       # Interactive Claude session attachment
+├── extension/                  # Grace Hopper VS Code extension source
+├── workspaces/                 # Cloned repos (gitignored)
+├── state/                      # Task state, logs, lockfiles (gitignored)
+└── claude-home/                # Shared ~/.claude (gitignored)
 ```
 
-## Stopping the agent
+---
+
+## Stopping
 
 ```bash
+# Local
 docker compose down
 ```
 
-Workspaces, state, and Claude conversation history are preserved in `./workspaces`, `./state`, and `./claude-home` on the host.
+Workspaces, state, and Claude conversation history are preserved in `./workspaces`, `./state`, and `./claude-home` across restarts.
+
+For Codespaces, stopping or deleting the Codespace does not affect any repositories or PRs Grace has already created.
