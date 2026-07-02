@@ -186,6 +186,31 @@ Open the **Grace Hopper** panel in the VS Code activity bar and click **+** — 
 
 The extension is the control plane for all agent sessions. It runs in VS Code — both local (code-server) and Codespaces — and gives any developer on the team a live view of what every agent is doing across every monitored repository.
 
+### Finding the panel
+
+Look for the robot icon in the VS Code activity bar (the vertical icon strip on the left):
+
+<img src="extension/media/icon.svg" width="48" alt="Grace Hopper icon" />
+
+Click it to open the **Grace Hopper** panel. If you don't see it, make sure the extension is installed — in Codespaces it activates automatically; locally it's built into the Docker image and served via code-server.
+
+### Adding your first repository
+
+Click the **＋** button in the panel toolbar and follow the three-step flow:
+
+```
+Step 1 — Pick a GitHub repository
+         ↓
+Step 2 — Pick the GitHub Projects v2 board linked to it
+         ↓
+Step 3 — Map your board's Status column names to Grace's three roles:
+         [ Todo column ]  →  Grace picks up new tickets
+         [ In Progress ]  →  Grace is working / can be resumed
+         [ In Review   ]  →  Grace watches CI and fixes failures
+```
+
+Once added, the repo appears as a top-level node in the panel and Grace starts polling immediately.
+
 **What it shows:**
 - 📁 Monitored repositories as top-level nodes, each showing task count and **total token spend**
 - ✅ Tasks grouped under their repository, sorted by status
