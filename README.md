@@ -95,7 +95,7 @@ No infrastructure needed. The agent runs as a background process inside the Code
 
 ### 1. Set Codespaces Secrets
 
-Go to `github.com → Settings → Codespaces → Secrets` and add:
+Go to `github.com → Settings → Codespaces → Secrets` and add each secret below. When creating each one, set **Repository access** to include this repository (or "All repositories").
 
 | Secret | Description |
 |---|---|
