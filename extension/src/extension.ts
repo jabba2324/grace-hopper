@@ -185,7 +185,18 @@ class RepoNode extends vscode.TreeItem {
         public readonly tasks: Task[],
     ) {
         super(config.repo, vscode.TreeItemCollapsibleState.Expanded);
-        this.description  = `project #${config.projectNumber} · ${tasks.length} task${tasks.length !== 1 ? 's' : ''}`;
+        const totalCost = tasks.reduce((sum, t) => {
+            const model = t.model ?? '';
+            let inputPer1M  = 5.00;
+            let outputPer1M = 25.00;
+            if (model.includes('haiku'))  { inputPer1M = 1.00; outputPer1M = 5.00; }
+            else if (model.includes('sonnet')) { inputPer1M = 3.00; outputPer1M = 15.00; }
+            return sum
+                + ((t.inputTokens  ?? 0) / 1_000_000) * inputPer1M
+                + ((t.outputTokens ?? 0) / 1_000_000) * outputPer1M;
+        }, 0);
+        const costStr = totalCost >= 0.01 ? ` · $${totalCost.toFixed(2)}` : '';
+        this.description  = `project #${config.projectNumber} · ${tasks.length} task${tasks.length !== 1 ? 's' : ''}${costStr}`;
         this.tooltip      = `${config.repo}\nProject #${config.projectNumber}`;
         this.contextValue = 'repo';
     }
