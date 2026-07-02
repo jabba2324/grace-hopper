@@ -582,6 +582,26 @@ def run_claude(prompt: str) -> int:
             ctx['output_tokens'] += session_output_tokens
             log.info('=== Tokens this session: %d in / %d out ===',
                      session_input_tokens, session_output_tokens)
+        else:
+            # Stream events carry no usage — try session-level totals instead.
+            try:
+                sess_data = client.beta.sessions.retrieve(session_id)
+                usage = getattr(sess_data, 'usage', None)
+                if usage:
+                    in_tok  = getattr(usage, 'input_tokens',  0) or 0
+                    out_tok = getattr(usage, 'output_tokens', 0) or 0
+                    if in_tok or out_tok:
+                        # Session totals are cumulative; subtract prior baseline to get delta.
+                        prior_in  = ctx['input_tokens']
+                        prior_out = ctx['output_tokens']
+                        ctx['input_tokens']  = max(in_tok,  prior_in)
+                        ctx['output_tokens'] = max(out_tok, prior_out)
+                        log.info('=== Session tokens (from retrieve): %d in / %d out ===',
+                                 ctx['input_tokens'], ctx['output_tokens'])
+                    else:
+                        log.info('=== Session retrieve: no usage data available ===')
+            except Exception as exc:
+                log.warning('Could not retrieve session usage: %s', exc)
 
     return 2 if paused else 0
 
