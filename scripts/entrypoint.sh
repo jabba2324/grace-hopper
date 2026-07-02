@@ -7,7 +7,7 @@ required_vars=(
     ANTHROPIC_ENVIRONMENT_ID
     AGENT_ID
     GITHUB_TOKEN
-    GITHUB_USERNAME
+    GH_USERNAME
 )
 for var in "${required_vars[@]}"; do
     if [[ -z "${!var:-}" ]]; then

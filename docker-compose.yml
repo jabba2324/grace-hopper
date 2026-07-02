@@ -13,7 +13,7 @@ services:
       # VS Code strips GITHUB_TOKEN from the extension host (security policy).
       # GRACE_GITHUB_TOKEN carries the same value under a name that isn't filtered.
       - GRACE_GITHUB_TOKEN=${GITHUB_TOKEN}
-      - GITHUB_USERNAME=${GITHUB_USERNAME}
+      - GH_USERNAME=${GH_USERNAME}
       - GIT_AUTHOR_NAME=${GIT_AUTHOR_NAME:-Agent}
       - GIT_AUTHOR_EMAIL=${GIT_AUTHOR_EMAIL:-mail@chrissewell.net}
     volumes:
@@ -38,7 +38,7 @@ services:
       # Ponytail lazy-dev mode: lite | full | ultra | off
       - PONYTAIL_DEFAULT_MODE=${PONYTAIL_DEFAULT_MODE:-full}
       - GITHUB_TOKEN=${GITHUB_TOKEN}
-      - GITHUB_USERNAME=${GITHUB_USERNAME}
+      - GH_USERNAME=${GH_USERNAME}
       - POLL_INTERVAL=${POLL_INTERVAL:-5}
       # Optional: default git author identity
       - GIT_AUTHOR_NAME=${GIT_AUTHOR_NAME:-Agent}

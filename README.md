@@ -135,7 +135,7 @@ Open the **Grace Hopper** panel in the VS Code activity bar and click **+** — 
 | `ANTHROPIC_ENVIRONMENT_ID` | Yes | Managed Agents environment ID |
 | `AGENT_ID` | Yes | Managed Agents agent ID |
 | `GITHUB_TOKEN` | Yes | Classic PAT with `repo` + `project` + `workflow` scopes |
-| `GITHUB_USERNAME` | Yes | Your GitHub username |
+| `GH_USERNAME` | Yes | Your GitHub username |
 | `CLAUDE_MODEL` | No | Model to use (default: `claude-opus-4-8`) |
 | `PONYTAIL_DEFAULT_MODE` | No | Ponytail mode: `lite`, `full` (default), `ultra`, `off` |
 | `POLL_INTERVAL` | No | Seconds between board checks (default: `5`) |

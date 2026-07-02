@@ -54,7 +54,7 @@ ITEM_ID       = os.environ.get('ITEM_ID', '')
 STATUS_FIELD  = os.environ.get('STATUS_FIELD_ID', '')
 IN_REVIEW     = os.environ.get('PROJECT_STATUS_IN_REVIEW', 'In Review')
 CLAUDE_MODEL   = os.environ.get('CLAUDE_MODEL', 'claude-opus-4-8')
-GH_USER        = os.environ.get('GITHUB_USERNAME', '')
+GH_USER        = os.environ.get('GH_USERNAME', '')
 AGENT_ID       = os.environ['AGENT_ID']
 ENVIRONMENT_ID = os.environ['ANTHROPIC_ENVIRONMENT_ID']
 
