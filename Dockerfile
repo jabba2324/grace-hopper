@@ -46,6 +46,11 @@ RUN chmod +x /app/scripts/*.sh /app/scripts/*.py
 
 COPY extension/ /app/extension/
 
+# Bake start.sh into the image at a fixed path so postStartCommand works
+# regardless of how ${containerWorkspaceFolder} resolves in Codespaces.
+COPY .devcontainer/start.sh /usr/local/bin/grace-start.sh
+RUN chmod +x /usr/local/bin/grace-start.sh
+
 RUN mkdir -p /workspaces /app/state /home/agent/.claude \
     && chown -R agent:agent /workspaces /app/state /app/scripts /app/extension /home/agent/.claude
 
@@ -53,11 +58,18 @@ USER agent
 WORKDIR /workspaces
 
 # Build and pre-install the Grace Hopper VS Code extension.
-# VSIX is kept at /home/agent/grace-hopper.vsix so Codespaces can install it too.
+# VSIX kept at /home/agent/grace-hopper.vsix for code-server (self-hosted).
+# Also unpacked into ~/.vscode-server/extensions/ so Codespaces VS Code picks
+# it up on first launch without needing a manual reload after postAttachCommand.
 RUN cd /app/extension \
     && npm install \
     && npm run compile \
     && npx vsce package --no-dependencies -o /home/agent/grace-hopper.vsix \
-    && code-server --install-extension /home/agent/grace-hopper.vsix
+    && code-server --install-extension /home/agent/grace-hopper.vsix \
+    && mkdir -p /home/agent/.vscode-server/extensions \
+    && cd /tmp && unzip -o /home/agent/grace-hopper.vsix -d grace-hopper-vsix \
+    && mv /tmp/grace-hopper-vsix/extension \
+          /home/agent/.vscode-server/extensions/grace-hopper.grace-hopper-0.1.0 \
+    && rm -rf /tmp/grace-hopper-vsix
 
 CMD ["/app/scripts/entrypoint.sh"]

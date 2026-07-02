@@ -18,7 +18,7 @@ PONYTAIL_DIR="/home/agent/.ponytail"
 if [[ -d "$PONYTAIL_DIR/.git" ]]; then
     git -C "$PONYTAIL_DIR" pull --ff-only 2>&1 || true
 else
-    git clone --depth=1 https://github.com/DietrichGebert/ponytail.git "$PONYTAIL_DIR"
+    git clone --depth=1 https://github.com/DietrichGebert/ponytail.git "$PONYTAIL_DIR" || true
 fi
 mkdir -p /home/agent/.claude
 cp "$PONYTAIL_DIR/AGENTS.md" /home/agent/.claude/CLAUDE.md
