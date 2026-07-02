@@ -344,9 +344,9 @@ class GraceHopperProvider implements vscode.TreeDataProvider<Node> {
 // ── GitHub quickpick helpers ──────────────────────────────────────────────────
 
 // VS Code strips GITHUB_TOKEN from the extension host process (security policy).
-// GRACE_GITHUB_TOKEN is the same value passed under a name that isn't filtered.
+// GH_TOKEN is the same value passed under a name that isn't filtered.
 function ghEnv(): NodeJS.ProcessEnv {
-    return { ...process.env, GH_TOKEN: process.env['GRACE_GITHUB_TOKEN'] || process.env['GITHUB_TOKEN'] || '' };
+    return { ...process.env, GH_TOKEN: process.env['GH_TOKEN'] || process.env['GITHUB_TOKEN'] || '' };
 }
 
 // Shell-joined exec — fine for simple commands with no special characters in args.

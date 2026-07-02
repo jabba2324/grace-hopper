@@ -21,7 +21,7 @@
     "ANTHROPIC_ENVIRONMENT_KEY": { "description": "Managed Agents environment key (sk-ant-oat01-...)" },
     "ANTHROPIC_ENVIRONMENT_ID":  { "description": "Managed Agents environment ID (env_...)" },
     "AGENT_ID":                  { "description": "Managed Agents agent ID (agent_...)" },
-    "GRACE_GITHUB_TOKEN":        { "description": "Classic PAT with repo+project+workflow scopes — overrides the auto-provided GITHUB_TOKEN so Grace can access all your repos" },
+    "GH_TOKEN":        { "description": "Classic PAT with repo+project+workflow scopes — overrides the auto-provided GITHUB_TOKEN so Grace can access all your repos" },
     "GH_USERNAME":               { "description": "Your GitHub username" }
   }
 }

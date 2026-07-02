@@ -103,10 +103,10 @@ Go to `github.com → Settings → Codespaces → Secrets` and add each secret b
 | `ANTHROPIC_ENVIRONMENT_KEY` | Managed Agents environment key (`sk-ant-oat01-...`) |
 | `ANTHROPIC_ENVIRONMENT_ID` | Managed Agents environment ID (`env_...`) |
 | `AGENT_ID` | Managed Agents agent ID (`agent_...`) |
-| `GRACE_GITHUB_TOKEN` | Classic PAT with `repo` + `project` + `workflow` scopes. Codespaces auto-provides `GITHUB_TOKEN` but it's scoped to this repo only — Grace needs this to access all your repositories |
+| `GH_TOKEN` | Classic PAT with `repo` + `project` + `workflow` scopes. Codespaces auto-provides `GITHUB_TOKEN` but it's scoped to this repo only — Grace needs this to access all your repositories |
 | `GH_USERNAME` | Your GitHub username — note: GitHub blocks secrets named `GITHUB_*`, so use `GH_USERNAME` here |
 
-> Codespaces auto-provides `GITHUB_TOKEN` but it only covers the current repo. `GRACE_GITHUB_TOKEN` overrides it so Grace can clone, push, and manage PRs across all your repos.
+> Codespaces auto-provides `GITHUB_TOKEN` but it only covers the current repo. `GH_TOKEN` overrides it so Grace can clone, push, and manage PRs across all your repos.
 
 If you haven't run the Managed Agents setup yet, see [step 3 above](#3-managed-agents-setup).
 
@@ -135,7 +135,7 @@ Open the **Grace Hopper** panel in the VS Code activity bar and click **+** — 
 | `ANTHROPIC_ENVIRONMENT_KEY` | Yes | Managed Agents environment key |
 | `ANTHROPIC_ENVIRONMENT_ID` | Yes | Managed Agents environment ID |
 | `AGENT_ID` | Yes | Managed Agents agent ID |
-| `GITHUB_TOKEN` | Yes | Classic PAT with `repo` + `project` + `workflow` scopes |
+| `GH_TOKEN` | Yes | Classic PAT with `repo` + `project` + `workflow` scopes |
 | `GH_USERNAME` | Yes | Your GitHub username |
 | `CLAUDE_MODEL` | No | Model to use (default: `claude-opus-4-8`) |
 | `PONYTAIL_DEFAULT_MODE` | No | Ponytail mode: `lite`, `full` (default), `ultra`, `off` |

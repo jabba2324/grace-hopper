@@ -5,9 +5,9 @@
 set -euo pipefail
 
 # GITHUB_TOKEN is provided automatically by Codespaces but is scoped to this repo only.
-# GRACE_GITHUB_TOKEN should be a classic PAT with repo+project+workflow scopes — it
+# GH_TOKEN should be a classic PAT with repo+project+workflow scopes — it
 # overrides the auto-token for git auth and gh CLI so Grace can access all your repos.
-export GITHUB_TOKEN="${GRACE_GITHUB_TOKEN:-$GITHUB_TOKEN}"
+export GITHUB_TOKEN="${GH_TOKEN:-$GITHUB_TOKEN}"
 export GITHUB_USERNAME="${GH_USERNAME:-${GITHUB_USER:-}}"
 
 echo "[grace-hopper] Setting up git auth..."
