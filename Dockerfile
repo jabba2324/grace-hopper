@@ -53,11 +53,11 @@ USER agent
 WORKDIR /workspaces
 
 # Build and pre-install the Grace Hopper VS Code extension.
-# VSIX is kept at /app/grace-hopper.vsix so Codespaces can install it too.
+# VSIX is kept at /home/agent/grace-hopper.vsix so Codespaces can install it too.
 RUN cd /app/extension \
     && npm install \
     && npm run compile \
-    && npx vsce package --no-dependencies -o /app/grace-hopper.vsix \
-    && code-server --install-extension /app/grace-hopper.vsix
+    && npx vsce package --no-dependencies -o /home/agent/grace-hopper.vsix \
+    && code-server --install-extension /home/agent/grace-hopper.vsix
 
 CMD ["/app/scripts/entrypoint.sh"]

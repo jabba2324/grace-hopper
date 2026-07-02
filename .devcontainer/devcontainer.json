@@ -3,7 +3,7 @@
   "image": "ghcr.io/jabba2324/grace-hopper:latest",
   "remoteUser": "agent",
 
-  "postCreateCommand": "code --install-extension /app/grace-hopper.vsix",
+  "postCreateCommand": "code --install-extension /home/agent/grace-hopper.vsix",
   "postStartCommand": "bash ${containerWorkspaceFolder}/.devcontainer/start.sh",
 
   "customizations": {
