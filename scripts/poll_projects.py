@@ -15,9 +15,13 @@ import sys
 import time
 from pathlib import Path
 
+import anthropic
+
 sys.path.insert(0, "/app/scripts")
 import state as task_state
 from github import GH_ENV, gql, gh
+
+_anthropic_client = anthropic.Anthropic()
 
 logging.basicConfig(
     level=logging.INFO,
@@ -371,6 +375,34 @@ def poll(project: dict, status_field: dict,
                      PREV_SESSION_ID=prev_session_id)
 
 
+def update_running_token_counts() -> None:
+    """Retrieve live token usage for all running tasks and write to tasks.json."""
+    try:
+        tasks = json.loads((STATE_DIR / "tasks.json").read_text())
+    except Exception:
+        return
+    running = [t for t in tasks if t.get("status") == "running" and t.get("sessionId")]
+    for task in running:
+        session_id = task["sessionId"]
+        try:
+            sess = _anthropic_client.beta.sessions.retrieve(session_id)
+            usage = getattr(sess, "usage", None)
+            if not usage:
+                continue
+            in_tok  = getattr(usage, "input_tokens",  0) or 0
+            out_tok = getattr(usage, "output_tokens", 0) or 0
+            if in_tok or out_tok:
+                task_state.patch(
+                    task["issueNumber"], task["type"],
+                    inputTokens=in_tok,
+                    outputTokens=out_tok,
+                )
+                log.debug("Token update #%s: %d in / %d out",
+                          task["issueNumber"], in_tok, out_tok)
+        except Exception as exc:
+            log.debug("Token poll failed for session %s: %s", session_id, exc)
+
+
 def main() -> None:
     log.info("Grace Hopper starting — polling every %ss", POLL_INTERVAL)
     while True:
@@ -380,6 +412,7 @@ def main() -> None:
                 "No repositories configured. Add repos via the VS Code extension "
                 "or set GITHUB_REPO + GITHUB_PROJECT_NUMBER env vars."
             )
+        update_running_token_counts()
         for cfg in configs:
             try:
                 repo_nwo       = cfg["repo"]
