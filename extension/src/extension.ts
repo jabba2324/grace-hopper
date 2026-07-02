@@ -31,6 +31,9 @@ interface Task {
     skipReason?:    string;
     startedAt?:     string;
     updatedAt?:     string;
+    inputTokens?:   number;
+    outputTokens?:  number;
+    model?:         string;
 }
 
 interface RepoConfig {
@@ -152,6 +155,26 @@ function loadTasks(): Task[] {
     }
 }
 
+// ── Token cost ────────────────────────────────────────────────────────────────
+
+function tokenCost(task: Task): string | undefined {
+    if (!task.inputTokens && !task.outputTokens) { return undefined; }
+    const model = task.model ?? '';
+    let inputPer1M  = 5.00;
+    let outputPer1M = 25.00;
+    if (model.includes('haiku')) {
+        inputPer1M  = 1.00;
+        outputPer1M = 5.00;
+    } else if (model.includes('sonnet')) {
+        inputPer1M  = 3.00;
+        outputPer1M = 15.00;
+    }
+    const cost = ((task.inputTokens  ?? 0) / 1_000_000) * inputPer1M
+               + ((task.outputTokens ?? 0) / 1_000_000) * outputPer1M;
+    if (cost < 0.01) { return '<$0.01'; }
+    return `$${cost.toFixed(2)}`;
+}
+
 // ── Tree nodes ────────────────────────────────────────────────────────────────
 
 type Node = RepoNode | TaskNode | DetailNode;
@@ -171,7 +194,8 @@ class RepoNode extends vscode.TreeItem {
 class TaskNode extends vscode.TreeItem {
     constructor(public readonly task: Task) {
         super(task.title, vscode.TreeItemCollapsibleState.Collapsed);
-        this.description  = STATUS_LABEL[task.status];
+        const cost = tokenCost(task);
+        this.description  = cost ? `${STATUS_LABEL[task.status]} · ${cost}` : STATUS_LABEL[task.status];
         this.tooltip      = `${task.title}\n${task.repo} · ${task.type}`;
         const base = task.status === 'running' ? 'runningTask'
                    : task.status === 'paused'  ? 'pausedTask'
@@ -253,6 +277,11 @@ function buildDetails(task: Task): DetailNode[] {
             arguments: [task.issueNumber, task.title],
         };
         items.push(node);
+    }
+    const cost = tokenCost(task);
+    if (cost) {
+        const tokens = `${((task.inputTokens ?? 0) / 1000).toFixed(0)}k in / ${((task.outputTokens ?? 0) / 1000).toFixed(0)}k out`;
+        items.push(new DetailNode('Cost', `${cost} · ${tokens}`));
     }
     if (task.updatedAt) {
         items.push(new DetailNode('Updated', task.updatedAt));

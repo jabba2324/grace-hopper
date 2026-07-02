@@ -88,11 +88,13 @@ log = logging.getLogger(__name__)
 # ── Mutable task context (updated as work progresses) ────────────────────────
 
 ctx: dict = {
-    'branch':     PR_BRANCH,
-    'default_br': 'main',
-    'pr_url':     '',
-    'pr_number':  PR_NUMBER_ENV,
-    'session_id': '',
+    'branch':        PR_BRANCH,
+    'default_br':    'main',
+    'pr_url':        '',
+    'pr_number':     PR_NUMBER_ENV,
+    'session_id':    '',
+    'input_tokens':  0,
+    'output_tokens': 0,
 }
 
 # ── Git helper ────────────────────────────────────────────────────────────────
@@ -154,6 +156,9 @@ def save_state(status: str) -> None:
             'prNumber':      int(ctx['pr_number']) if ctx['pr_number'] else None,
             'failedRunId':   FAILED_RUN or None,
             'sessionId':     ctx['session_id'] or None,
+            'inputTokens':   ctx['input_tokens'] or None,
+            'outputTokens':  ctx['output_tokens'] or None,
+            'model':         CLAUDE_MODEL,
         })
     except Exception as exc:
         log.warning('save_state failed: %s', exc)
@@ -503,6 +508,9 @@ def run_claude(prompt: str) -> int:
     )
     watcher.start()
 
+    session_input_tokens  = 0
+    session_output_tokens = 0
+
     try:
         # Stream-first: open stream then send the message so no early events are missed.
         with client.beta.sessions.events.stream(session_id=session_id) as stream:
@@ -540,9 +548,17 @@ def run_claude(prompt: str) -> int:
                     for block in event.content:
                         if block.type == 'text' and block.text:
                             log.info(block.text)
+                    usage = getattr(event, 'usage', None)
+                    if usage:
+                        session_input_tokens  += getattr(usage, 'input_tokens',  0) or 0
+                        session_output_tokens += getattr(usage, 'output_tokens', 0) or 0
                 elif event.type == 'agent.tool_use':
                     log.info('[%s] %s', event.name, str(event.input)[:200])
                 elif event.type == 'session.status_idle':
+                    usage = getattr(event, 'usage', None)
+                    if usage:
+                        session_input_tokens  += getattr(usage, 'input_tokens',  0) or 0
+                        session_output_tokens += getattr(usage, 'output_tokens', 0) or 0
                     stop_reason = getattr(event, 'stop_reason', None)
                     reason_type = getattr(stop_reason, 'type', None) if stop_reason else None
                     if reason_type == 'requires_action':
@@ -551,11 +567,21 @@ def run_claude(prompt: str) -> int:
                 elif event.type == 'session.status_terminated':
                     log.error('Session terminated unexpectedly')
                     return 1
+                else:
+                    usage = getattr(event, 'usage', None)
+                    if usage:
+                        session_input_tokens  += getattr(usage, 'input_tokens',  0) or 0
+                        session_output_tokens += getattr(usage, 'output_tokens', 0) or 0
     except Exception as exc:
         log.error('Session stream error: %s', exc)
         return 1
     finally:
         stop_event.set()
+        if session_input_tokens or session_output_tokens:
+            ctx['input_tokens']  += session_input_tokens
+            ctx['output_tokens'] += session_output_tokens
+            log.info('=== Tokens this session: %d in / %d out ===',
+                     session_input_tokens, session_output_tokens)
 
     return 2 if paused else 0
 
@@ -643,6 +669,13 @@ def main() -> None:
     log.info('━' * 60)
     log.info('=== [%s] issue #%s: %s ===', MODE, ISSUE_NUM, ISSUE_TITLE)
     log.info('=== Repo: %s ===', REPO_NWO)
+
+    # Carry forward token counts from previous sessions for this task so the
+    # cost display accumulates correctly across new → resume → ci-fix runs.
+    existing = task_state.get_entry(ISSUE_NUM, STATE_TYPE)
+    if existing:
+        ctx['input_tokens']  = existing.get('inputTokens',  0) or 0
+        ctx['output_tokens'] = existing.get('outputTokens', 0) or 0
 
     LOCKFILE.write_text(str(os.getpid()))
     status = 'failed'
