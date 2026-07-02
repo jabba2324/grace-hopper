@@ -375,14 +375,25 @@ def poll(project: dict, status_field: dict,
                      PREV_SESSION_ID=prev_session_id)
 
 
-def update_running_token_counts() -> None:
-    """Retrieve live token usage for all running tasks and write to tasks.json."""
+def update_token_counts() -> None:
+    """
+    Retrieve token usage from Anthropic for tasks that need it:
+    - Running tasks: polled every cycle for live updates.
+    - Any task with a sessionId but no token data yet: backfilled once.
+    """
     try:
         tasks = json.loads((STATE_DIR / "tasks.json").read_text())
     except Exception:
         return
-    running = [t for t in tasks if t.get("status") == "running" and t.get("sessionId")]
-    for task in running:
+
+    candidates = [
+        t for t in tasks
+        if t.get("sessionId") and (
+            t.get("status") == "running"          # live update
+            or not t.get("inputTokens")            # backfill completed/paused/failed
+        )
+    ]
+    for task in candidates:
         session_id = task["sessionId"]
         try:
             sess = _anthropic_client.beta.sessions.retrieve(session_id)
@@ -400,7 +411,7 @@ def update_running_token_counts() -> None:
                 log.debug("Token update #%s: %d in / %d out",
                           task["issueNumber"], in_tok, out_tok)
         except Exception as exc:
-            log.debug("Token poll failed for session %s: %s", session_id, exc)
+            log.debug("Token fetch failed for session %s: %s", session_id, exc)
 
 
 def main() -> None:
@@ -412,7 +423,7 @@ def main() -> None:
                 "No repositories configured. Add repos via the VS Code extension "
                 "or set GITHUB_REPO + GITHUB_PROJECT_NUMBER env vars."
             )
-        update_running_token_counts()
+        update_token_counts()
         for cfg in configs:
             try:
                 repo_nwo       = cfg["repo"]
