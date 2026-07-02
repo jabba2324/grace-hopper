@@ -103,7 +103,7 @@ Go to `github.com → Settings → Codespaces → Secrets` and add each secret b
 | `ANTHROPIC_ENVIRONMENT_KEY` | Managed Agents environment key (`sk-ant-oat01-...`) |
 | `ANTHROPIC_ENVIRONMENT_ID` | Managed Agents environment ID (`env_...`) |
 | `AGENT_ID` | Managed Agents agent ID (`agent_...`) |
-| `GITHUB_USERNAME` | Your GitHub username |
+| `GH_USERNAME` | Your GitHub username — note: GitHub blocks secrets named `GITHUB_*`, so use `GH_USERNAME` here |
 
 > `GITHUB_TOKEN` is provided automatically by Codespaces — you do not need to set it.
 

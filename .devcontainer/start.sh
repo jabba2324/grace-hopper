@@ -6,7 +6,8 @@ set -euo pipefail
 
 # GITHUB_TOKEN is provided automatically by Codespaces.
 # GITHUB_USERNAME falls back to the Codespaces-provided GITHUB_USER if not set explicitly.
-export GITHUB_USERNAME="${GITHUB_USERNAME:-${GITHUB_USER:-}}"
+# Codespaces doesn't allow secrets named GITHUB_* — accept GH_USERNAME as an alternative.
+export GITHUB_USERNAME="${GITHUB_USERNAME:-${GH_USERNAME:-${GITHUB_USER:-}}}"
 
 echo "[grace-hopper] Setting up git auth..."
 source /app/scripts/setup_auth.sh
