@@ -18,12 +18,12 @@ Every poll cycle Grace scans all board items and responds to their state:
 
 Grace Hopper runs in two modes — pick one:
 
-| | Local (self-hosted) | GitHub Codespaces |
+| | Docker | GitHub Codespaces |
 |---|---|---|
 | **VS Code** | code-server in browser (`localhost:8080`) | Native Codespaces VS Code |
 | **Agent** | Docker Compose | Background process in the Codespace |
 | **Secrets** | `.env` file | Codespaces Secrets in GitHub settings |
-| **Best for** | VPS, home server, always-on | Occasional use, no infrastructure |
+| **Best for** | self/cloud hosted, always-on | Occasional use, no infrastructure |
 
 ---
 
